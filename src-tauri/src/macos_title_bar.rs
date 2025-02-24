@@ -17,15 +17,9 @@ pub fn hide_window_buttons_each<R: tauri::Runtime>(
             let close_button = id.standardWindowButton_(NSWindowButton::NSWindowCloseButton);
             let min_button = id.standardWindowButton_(NSWindowButton::NSWindowMiniaturizeButton);
             let zoom_button = id.standardWindowButton_(NSWindowButton::NSWindowZoomButton);
-            if close {
-                let _: () = msg_send![close_button, setHidden: true];
-            }
-            if minimize {
-                let _: () = msg_send![min_button, setHidden: true];
-            }
-            if maximize {
-                let _: () = msg_send![zoom_button, setHidden: true];
-            }
+            let _: () = msg_send![close_button, setHidden: close];
+            let _: () = msg_send![min_button, setHidden: minimize];
+            let _: () = msg_send![zoom_button, setHidden: maximize];
         })
         .unwrap();
     dbg!("Hid window buttons", (close, minimize, maximize));
