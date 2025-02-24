@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "types": ["bun-types"],
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "noEmit": true
+  },
+  "include": ["src"]
+}
