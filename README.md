@@ -1,6 +1,17 @@
-# Tauri + React + Typescript
+## <img src="./src-tauri/icons/app-icon.png" height="24px" /> Right Now
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+- Offline desktop UI
+- Markdown todo list support
+- Pomodoro timer
+- Customizable sound cues
+
+## Screenshots
+
+### TODOs Tracker (floating window)
+![Screenshot of the TODOs Tracker](./screenshots/2025-02-24-TODOs-Tracker@2x.png)
+
+### TODOs Planner
+![Screenshot of the TODOs Planner](./screenshots/2025-02-24-TODOs-Planner@2x.png)
 
 ## Recommended IDE Setup
 

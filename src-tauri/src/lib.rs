@@ -159,19 +159,12 @@ async fn list_sound_variations(
     Ok(find_matching_sound_files(&archive, &name))
 }
 
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-#[allow(dead_code)]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
-
 #[cfg(target_os = "macos")]
 mod macos_title_bar;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
-fn toggle_mini(window: tauri::Window, mini: bool) {
+fn toggle_mini_os_specific_styling(window: tauri::Window, mini: bool) {
     #[cfg(target_os = "macos")]
     macos_title_bar::hide_window_buttons_each(&window, mini, mini, mini);
 }
@@ -229,11 +222,10 @@ pub fn run() {
         })
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
-            greet,
             play_sound,
             stop_sound,
             list_sound_variations,
-            toggle_mini
+            toggle_mini_os_specific_styling
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -49,7 +49,7 @@ export class AppWindows {
     const w = this.window;
     const miniHeight = 40;
     await Promise.all([w.setAlwaysOnTop(mini), w.setMaximizable(!mini), w.setSkipTaskbar(!mini)]);
-    await invoke("toggle_mini", { mini });
+    await invoke("toggle_mini_os_specific_styling", { mini });
     await w.setSize(mini ? new LogicalSize(400, miniHeight) : new LogicalSize(600, 400));
     await w.setMaxSize(mini ? new LogicalSize(3000, miniHeight) : undefined);
     await w.setMinSize(mini ? new LogicalSize(300, miniHeight) : new LogicalSize(300, 300));
