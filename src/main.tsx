@@ -45,20 +45,37 @@ async function initializeApp() {
     projectManager.subscribe(async (loaded) => {
       console.log("Project changed", loaded);
       if (!loaded) {
-        appWindows.setTitle(null);
+        appWindows.setTitle(null, null);
         await appWindows.expandToPlanner(); // Always expand when no project
         return;
       }
 
-      const { projectFile } = loaded;
+      const { projectFile, fullPath, workState } = loaded;
 
-      // Update window/tray state with current task
-      const currentTask = projectFile.markdown?.find(
-        (a): a is typeof a & { type: "task" } => a.type === "task" && !a.complete,
+      // Find current task and its context
+      const tasks = projectFile.markdown?.filter((a): a is typeof a & { type: "task" } => a.type === "task") ?? [];
+      const currentTask = tasks.find((t) => !t.complete);
+
+      // Find the last heading before the current task
+      let currentHeading: string | undefined;
+      if (currentTask) {
+        for (let i = 0; i < projectFile.markdown.length; i++) {
+          const item = projectFile.markdown[i];
+          if (item === currentTask) break;
+          if (item.type === "heading") {
+            currentHeading = item.text;
+          }
+        }
+      }
+
+      await appWindows.setTitle(
+        workState === "working" && currentTask ? { task: currentTask, heading: currentHeading } : null,
+        fullPath,
+        tasks,
       );
-      await appWindows.setTitle(currentTask?.name ?? null);
+
       // Set initial window state based on project state
-      if (loaded.workState === "planning") {
+      if (workState === "planning") {
         await appWindows.expandToPlanner();
       } else {
         await appWindows.collapseToTracker();

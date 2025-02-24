@@ -22,5 +22,4 @@ pub fn hide_window_buttons_each<R: tauri::Runtime>(
             let _: () = msg_send![zoom_button, setHidden: maximize];
         })
         .unwrap();
-    dbg!("Hid window buttons", (close, minimize, maximize));
 }
