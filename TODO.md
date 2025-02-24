@@ -1,7 +1,4 @@
 ---
-current_state: working
-current_state_changed_at: '2025-02-21T13:50:22.664Z'
-current_state_ends_at: '2025-02-21T14:15:22.664Z'
 pomodoro_settings:
   work_duration: 25
   break_duration: 5
