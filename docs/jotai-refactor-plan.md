@@ -15,24 +15,103 @@
 // src/atoms/project.ts
 import { atom } from "jotai";
 import type { ProjectFile, WorkState } from "../lib/project";
-export const projectControllerAtom = atom<ProjectController>({
-  pathAtom: atom<string | null>(null),
-  contentAtom: atom<ProjectFile | null>(null),
-  workStateAtom: atom<WorkState>("planning"),
-  stateTransitionsAtom: atom({ startedAt: Date.now() }),
-});
+
+export function createProjectController(
+  store: JotaiStore,
+  options: ProjectManagerOptions,
+): ProjectController {
+  const pathAtom = atom<string | null>(null);
+  const contentAtom = atom<ProjectFile | null>(null);
+  const workStateAtom = atom<WorkState>("planning");
+  const stateTransitionsAtom = atom({ startedAt: Date.now() });
+
+  return {
+    pathAtom,
+    contentAtom,
+    workStateAtom,
+    stateTransitionsAtom,
+    async updateContent(
+      fn: (project: ProjectFile) => void | boolean,
+    ): Promise<void> {
+      // ...
+    },
+  };
+}
 ```
 
 ### Window State Atoms
 
 ```typescript
 // src/atoms/window.ts
-export const windowControllerAtom = atom<WindowController>({
-  isCompactAtom: atom(false),
-  toggleCompact: (force?: boolean) => {
-    // Implementation
-  },
-});
+import { atom } from "jotai";
+import type { WindowController, WindowOptions } from "../ui";
+
+export function createWindowController(
+  store: JotaiStore,
+  options: WindowOptions,
+): WindowController {
+  const isCompactAtom = atom<boolean>(false);
+  const taskSummaryAtom = options.taskSummaryAtom;
+
+  // Create derived atoms or computed values in the closure
+  const toggleCompactAtom = atom(
+    (get) => get(isCompactAtom),
+    (get, set, force?: boolean) => {
+      const newValue = force ?? !get(isCompactAtom);
+      set(isCompactAtom, newValue);
+    },
+  );
+
+  return {
+    isCompactAtom,
+    taskSummaryAtom,
+    toggleCompact: (force?: boolean) => store.set(toggleCompactAtom, force),
+  };
+}
+```
+
+### Sound Manager Atoms
+
+```typescript
+// src/atoms/sounds.ts
+import { atom } from "jotai";
+import type { SoundManagerOptions, SoundPackController } from "../ui";
+
+export function createSoundController(
+  store: JotaiStore,
+  options: SoundManagerOptions,
+): SoundPackController {
+  const nameAtom = atom<string>("");
+  const isDefaultAtom = atom<boolean>(false);
+  const soundPackIdAtom = options.projectSoundPackIdAtom;
+
+  return {
+    nameAtom,
+    isDefaultAtom,
+    soundPackIdAtom,
+  };
+}
+```
+
+### Task State Atoms
+
+```typescript
+// src/atoms/tasks.ts
+import { atom } from "jotai";
+import type { TaskController } from "../ui";
+
+export function createTaskController(
+  store: JotaiStore,
+  initialTitle: string,
+): TaskController {
+  const titleAtom = atom<string>(initialTitle);
+  const completeAtom = atom<boolean>(false);
+
+  return {
+    titleAtom,
+    completeAtom,
+  };
+}
 ```
 
 ## Phase 2: Controller Refactor

@@ -1,4 +1,5 @@
 import type { Atom, WritableAtom } from "jotai";
+import type { ProjectFile, WorkState } from "./lib/project";
 
 export interface TaskController {
   titleAtom: WritableAtom<string, [string], void>;
@@ -52,4 +53,22 @@ export interface SoundManagerOptions {
   defaultSoundPackPath: string;
   soundPackDirectory: string;
   projectSoundPackIdAtom: WritableAtom<string | null, [string | null], void>;
+}
+
+export interface ProjectController {
+  pathAtom: Atom<string | null>;
+  contentAtom: Atom<ProjectFile | null>;
+  workStateAtom: WritableAtom<WorkState, [WorkState], void>;
+  stateTransitionsAtom: Atom<{
+    startedAt: number;
+    endsAt?: number;
+  }>;
+
+  load(path: string): Promise<void>;
+  updateContent(fn: (project: ProjectFile) => void | boolean): Promise<void>;
+}
+
+export interface ProjectManagerOptions {
+  recentProjectsAtom: WritableAtom<string[], [string[]], void>;
+  defaultProjectPath?: string;
 }
