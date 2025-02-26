@@ -116,25 +116,18 @@ export class AppWindows {
     todoPath?: string | null,
     tasks?: Array<{ name: string; complete?: string | boolean }>,
   ) {
-    if (todoPath !== undefined) {
-      await this.setTodoPath(todoPath);
-    }
+    if (todoPath !== undefined) await this.setTodoPath(todoPath);
 
-    if (tasks) {
-      await this.updateTaskList(tasks);
-    }
+    if (tasks) await this.updateTaskList(tasks);
 
+    await this.tray?.setIcon(await TRAY_IMAGES.Base);
+    await this.window?.setTitle("");
     if (taskContext) {
-      await this.tray?.setIcon(await TRAY_IMAGES.ZeroWidth);
       // Show heading in title, fallback to task name if no heading
       const title = taskContext.heading ?? taskContext.task.name;
       await this.tray?.setTitle(truncateString(title, 15, "…"));
-      await this.window?.setTitle("");
     } else {
-      await this.tray?.setIcon(await TRAY_IMAGES.Base);
       await this.tray?.setTitle(null);
-      await this.window?.setTitle("");
-      // await this.window?.setTitle("Right Now");
     }
   }
 
