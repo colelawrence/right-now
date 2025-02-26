@@ -15,26 +15,39 @@
 // src/atoms/project.ts
 import { atom } from "jotai";
 import type { ProjectFile, WorkState } from "../lib/project";
+import type { ProjectController, ProjectManagerOptions } from "../ui";
 
 export function createProjectController(
   store: JotaiStore,
   options: ProjectManagerOptions,
 ): ProjectController {
+  // Define atoms outside the returned object to ensure proper typing
   const pathAtom = atom<string | null>(null);
   const contentAtom = atom<ProjectFile | null>(null);
   const workStateAtom = atom<WorkState>("planning");
   const stateTransitionsAtom = atom({ startedAt: Date.now() });
+  
+  // Define write-only atoms for operations
+  const updateContentAtom = atom(
+    null,
+    async (_get, set, fn: (project: ProjectFile) => void | boolean): Promise<void> => {
+      const content = _get(contentAtom);
+      if (!content) return;
+      
+      const newContent = structuredClone(content);
+      if (fn(newContent) === false) return;
+      
+      set(contentAtom, newContent);
+      // Additional side effects like file I/O would go here
+    }
+  );
 
   return {
     pathAtom,
     contentAtom,
     workStateAtom,
     stateTransitionsAtom,
-    async updateContent(
-      fn: (project: ProjectFile) => void | boolean,
-    ): Promise<void> {
-      // ...
-    },
+    updateContent: (fn) => store.set(updateContentAtom, fn),
   };
 }
 ```
@@ -50,21 +63,24 @@ export function createWindowController(
   store: JotaiStore,
   options: WindowOptions,
 ): WindowController {
+  // Define atoms outside the returned object
   const isCompactAtom = atom<boolean>(false);
+  
+  // Reference provided atoms
   const taskSummaryAtom = options.taskSummaryAtom;
 
-  // Create derived atoms or computed values in the closure
+  // Create a write-only atom for toggling compact state
   const toggleCompactAtom = atom(
-    (get) => get(isCompactAtom),
-    (get, set, force?: boolean) => {
-      const newValue = force ?? !get(isCompactAtom);
+    null,
+    (_get, set, force?: boolean) => {
+      const currentValue = _get(isCompactAtom);
+      const newValue = force !== undefined ? force : !currentValue;
       set(isCompactAtom, newValue);
-    },
+    }
   );
 
   return {
     isCompactAtom,
-    taskSummaryAtom,
     toggleCompact: (force?: boolean) => store.set(toggleCompactAtom, force),
   };
 }
@@ -81,14 +97,26 @@ export function createSoundController(
   store: JotaiStore,
   options: SoundManagerOptions,
 ): SoundPackController {
+  // Define atoms outside the returned object
   const nameAtom = atom<string>("");
   const isDefaultAtom = atom<boolean>(false);
+  
+  // Reference provided atoms
   const soundPackIdAtom = options.projectSoundPackIdAtom;
+  
+  // Create a write-only atom for toggling default state
+  const setIsDefaultAtom = atom(
+    null,
+    (_get, set, value: boolean) => {
+      set(isDefaultAtom, value);
+      // Additional side effects could go here
+    }
+  );
 
   return {
     nameAtom,
     isDefaultAtom,
-    soundPackIdAtom,
+    setIsDefault: (value: boolean) => store.set(setIsDefaultAtom, value),
   };
 }
 ```
@@ -104,12 +132,15 @@ export function createTaskController(
   store: JotaiStore,
   initialTitle: string,
 ): TaskController {
+  // Define atoms outside the returned object
   const titleAtom = atom<string>(initialTitle);
   const completeAtom = atom<boolean>(false);
-
+  
   return {
     titleAtom,
     completeAtom,
+    setTitle: (title: string) => store.set(titleAtom, title),
+    setComplete: (complete: boolean) => store.set(completeAtom, complete),
   };
 }
 ```
