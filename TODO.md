@@ -24,6 +24,9 @@ pomodoro_settings:
 First get the sound on fal.ai
 - [ ] Control OS music playback when starting a break
 - [ ] Show a flashing state when the timer goes past the allocated time
+- [ ] Play with adaptive soundtracks like synthet
+https://youtu.be/8WK02utnjj8
+
 
 # Load Screen
 
