@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { cn } from "./utils/cn";
 
 interface TimerProps {
   /** For showing "time worked" */
@@ -142,9 +143,11 @@ export function Timer({ startTime, endTime, className, onAdjustTime }: TimerProp
       <input
         ref={inputRef}
         type="text"
-        className={`max-w-16 text-start rounded bg-transparent border-none field-sizing-content p-1 m-1
-          ${inputError ? "border-red-500" : "border-gray-300"} 
-          ${className}`}
+        className={cn(
+          "max-w-16 text-start rounded bg-transparent border-none field-sizing-content p-1",
+          inputError ? "border-red-500" : "border-gray-300",
+          className,
+        )}
         defaultValue={`${formattedTime}`}
         placeholder="1:30, 5m..."
         onBlur={handleInputBlur}
@@ -156,7 +159,11 @@ export function Timer({ startTime, endTime, className, onAdjustTime }: TimerProp
 
   return (
     <span
-      className={`${className} p-2 group cursor-pointer hover:text-blue-600 flex items-center gap-1 ${overtimeIndicator ? "text-red-700 animate-pulse" : ""}`}
+      className={cn(
+        "p-2 group cursor-pointer hover:text-blue-600 flex items-center gap-1",
+        overtimeIndicator ? "text-red-700 animate-pulse" : "",
+        className,
+      )}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       title={

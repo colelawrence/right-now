@@ -49,7 +49,7 @@ https://youtu.be/8WK02utnjj8
 
 # Window management
 
-- [ ] Expand the app without stopping the session
+- [x] Expand the app without stopping the session
 - [ ] Compact mode should stay aligned to bottom coords
 - [ ] Prevent making window larger and not reverting when there is a scrollbar issue
 

@@ -201,6 +201,7 @@ function AppReady({ controllers }: { controllers: AppControllers }) {
     onCompleteTask: async (task: ProjectMarkdown & { type: "task" }) => {
       await projectManager.updateProject((draft) => handleCompleteTask(task, draft));
     },
+    toggleCompact: () => setIsCompact(!isCompact),
   };
 
   return isCompact ? <AppCompact {...commonProps} /> : <AppPlanner {...commonProps} />;
@@ -214,6 +215,7 @@ interface AppViewProps {
   onTimeAdjust: (ms: number) => void;
   onOpenProject: () => void;
   onCompleteTask: (task: ProjectMarkdown & { type: "task" }) => void;
+  toggleCompact: () => void;
 }
 
 function useCurrentTask(project: LoadedProjectState) {
@@ -235,7 +237,15 @@ const findParent = (element: HTMLElement, condition: (element: HTMLElement) => b
   return null;
 };
 
-function AppCompact({ project, loaded, endTime, onStateChange, onTimeAdjust, onCompleteTask }: AppViewProps) {
+function AppCompact({
+  project,
+  loaded,
+  endTime,
+  onStateChange,
+  onTimeAdjust,
+  onCompleteTask,
+  toggleCompact,
+}: AppViewProps) {
   const currentTask = useCurrentTask(project);
   const workingOnTask = project.workState === "working" && currentTask != null;
   const colors = workingOnTask
@@ -258,7 +268,7 @@ function AppCompact({ project, loaded, endTime, onStateChange, onTimeAdjust, onC
         event.stopPropagation();
       }}
     >
-      <div className="flex-1 flex items-center min-w-0">
+      <div className="flex-1 flex items-center min-w-0 gap-1">
         {currentTask && (
           <button
             onClick={handleCompleteTask}
@@ -288,13 +298,15 @@ function AppCompact({ project, loaded, endTime, onStateChange, onTimeAdjust, onC
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <Timer
-            startTime={project.stateTransitions.startedAt}
-            endTime={endTime}
-            className="text-sm font-mono"
-            onAdjustTime={onTimeAdjust}
-          />
-          <StateControls project={project} onStateChange={onStateChange} compact />
+          {project.workState !== "planning" && (
+            <Timer
+              startTime={project.stateTransitions.startedAt}
+              endTime={endTime}
+              className="text-sm font-mono py-0"
+              onAdjustTime={onTimeAdjust}
+            />
+          )}
+          <StateControls project={project} onStateChange={onStateChange} compact toggleCompact={toggleCompact} />
         </div>
       </div>
     </main>
@@ -347,6 +359,7 @@ function AppPlanner({
   onTimeAdjust,
   onCompleteTask,
   onOpenProject,
+  toggleCompact,
 }: AppViewProps) {
   return (
     <main className="h-screen flex flex-col bg-gradient-to-br from-white to-gray-50">
@@ -370,7 +383,7 @@ function AppPlanner({
             <Timer
               startTime={project.stateTransitions.startedAt}
               endTime={endTime}
-              className="text-sm font-mono text-gray-600"
+              className="text-sm font-mono text-gray-600 py-0"
               onAdjustTime={onTimeAdjust}
             />
           )}
@@ -397,7 +410,7 @@ function AppPlanner({
       </div>
       <footer className="absolute bottom-0 right-4">
         <div className="flex justify-center p-2">
-          <StateControls project={project} onStateChange={onStateChange} />
+          <StateControls project={project} onStateChange={onStateChange} toggleCompact={toggleCompact} />
         </div>
       </footer>
     </main>
