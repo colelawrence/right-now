@@ -18,6 +18,7 @@ pomodoro_settings:
 # Cues
 
 - [x] Play audio cue when work starts
+- [x] Fix repeated sounds when waking up laptop
 - [x] Play audio cues for start, and warning before end
 - [x] Notify user when time is up
 - [x] Play audio cue when the user manually checks off a TODO item

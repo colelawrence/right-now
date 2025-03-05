@@ -91,9 +91,9 @@ function AppReady({ controllers }: { controllers: AppControllers }) {
       if (timeLeft <= WARNING_THRESHOLD_MS && now - lastWarningTime > WARNING_THRESHOLD_MS) {
         setLastWarningTime(now);
         if (loaded.workState === "working") {
-          await soundManager.playSound(SoundEventName.BreakApproaching);
+          soundManager.playSound(SoundEventName.BreakApproaching);
         } else if (loaded.workState === "break") {
-          await soundManager.playSound(SoundEventName.BreakEndApproaching);
+          soundManager.playSound(SoundEventName.BreakEndApproaching);
         }
       }
     };
@@ -118,7 +118,7 @@ function AppReady({ controllers }: { controllers: AppControllers }) {
     if (taskToComplete) {
       taskToComplete.complete = taskToComplete.complete ? false : completionMark;
       if (taskToComplete.complete) {
-        soundManager.playSound(SoundEventName.TodoComplete).catch(console.error);
+        soundManager.playSound(SoundEventName.TodoComplete);
       }
       return true;
     }

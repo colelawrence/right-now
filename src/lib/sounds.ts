@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { resolveResource } from "@tauri-apps/api/path";
 import type { WritableAtom } from "jotai";
 import { MapOrSetDefault } from "./MapOrSetDefault";
+import { debounce } from "./debounce";
 import type { JotaiStore } from "./jotai-types";
 
 export enum SoundEventName {
@@ -24,7 +25,7 @@ export type SoundPack = {
 };
 
 export interface ISoundManager {
-  playSound(event: SoundEventName): Promise<void>;
+  playSound(event: SoundEventName): void;
   listSoundPacks(): Promise<string[]>;
   listSoundVariations(event: SoundEventName): Promise<string[]>;
 }
@@ -33,6 +34,20 @@ export class ISoundManager implements ISoundManager {
   private soundPackPath: string;
   // Start at a random sound for this session
   private invocationCounter = new MapOrSetDefault((name: string) => Math.floor(Math.random() * 100));
+  // Debounce the sound play to avoid spamming the system for example when the user is returning from sleep
+  private playSoundDebounced = debounce(1000, async (event: SoundEventName) => {
+    try {
+      await invoke("play_sound", {
+        soundPackPath: this.soundPackPath,
+        name: event,
+        // Increment counter to cycle through variations
+        invocation: this.invocationCounter.update(event, (invocation) => invocation + 1),
+      });
+    } catch (error) {
+      console.error(`Failed to play sound ${event}:`, error);
+      // Don't throw - we want to fail silently if sound doesn't work
+    }
+  });
 
   constructor(
     private store: JotaiStore,
@@ -48,18 +63,8 @@ export class ISoundManager implements ISoundManager {
     return new ISoundManager(store, soundPackPath);
   }
 
-  async playSound(event: SoundEventName): Promise<void> {
-    try {
-      await invoke("play_sound", {
-        soundPackPath: this.soundPackPath,
-        name: event,
-        // Increment counter to cycle through variations
-        invocation: this.invocationCounter.update(event, (invocation) => invocation + 1),
-      });
-    } catch (error) {
-      console.error(`Failed to play sound ${event}:`, error);
-      // Don't throw - we want to fail silently if sound doesn't work
-    }
+  playSound(event: SoundEventName): void {
+    this.playSoundDebounced(event);
   }
 
   async listSoundPacks(): Promise<string[]> {
