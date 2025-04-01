@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { resolveResource } from "@tauri-apps/api/path";
 import type { WritableAtom } from "jotai";
 import { MapOrSetDefault } from "./MapOrSetDefault";
-import { debounce } from "./debounce";
+import { debounceAndThrottle } from "./debounce";
 import type { JotaiStore } from "./jotai-types";
 
 export enum SoundEventName {
@@ -35,7 +35,7 @@ export class ISoundManager implements ISoundManager {
   // Start at a random sound for this session
   private invocationCounter = new MapOrSetDefault((name: string) => Math.floor(Math.random() * 100));
   // Debounce the sound play to avoid spamming the system for example when the user is returning from sleep
-  private playSoundDebounced = debounce(1000, async (event: SoundEventName) => {
+  private playSoundDebounced = debounceAndThrottle(100, 2000, async (event: SoundEventName) => {
     try {
       await invoke("play_sound", {
         soundPackPath: this.soundPackPath,
