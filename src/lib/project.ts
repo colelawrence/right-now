@@ -1,6 +1,6 @@
 import { path } from "@tauri-apps/api";
 import { open } from "@tauri-apps/plugin-dialog";
-import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
+import { type DirEntry, readDir, readTextFile, stat, writeTextFile } from "@tauri-apps/plugin-fs";
 import { type ProjectFile, ProjectStateEditor } from "./ProjectStateEditor";
 import type { ProjectStore } from "./store";
 import { FileWatcher } from "./watcher";
@@ -43,13 +43,57 @@ export class ProjectManager {
   async openProject(defaultProject?: string) {
     const selected = await open({
       multiple: false,
-      title: "Open TODO file",
+      title: "Select folder or TODO file",
       defaultPath: defaultProject,
-      filters: [{ name: "Markdown", extensions: ["md"] }],
+      directory: true, // Allow folder selection
     });
 
     if (selected && !Array.isArray(selected)) {
-      await this.loadProject(selected, "absolute").catch(withError(`Failed to load project (${selected})`));
+      await this.handleFolderOrFile(selected).catch(withError(`Failed to handle selection (${selected})`));
+    }
+  }
+
+  private async handleFolderOrFile(selectedPath: string): Promise<void> {
+    try {
+      const fileInfo = await stat(selectedPath);
+
+      if (fileInfo.isDirectory) {
+        // Search for existing TODO files
+        const entries = await readDir(selectedPath);
+        const todoFile = entries.find((entry: DirEntry) => {
+          const filename = entry.name.toLowerCase();
+          return (
+            filename.endsWith(".md") &&
+            (filename.startsWith("todo") || filename.startsWith("to-do") || filename.startsWith("the"))
+          );
+        });
+
+        if (todoFile) {
+          // Use existing TODO file
+          await this.loadProject(await path.join(selectedPath, todoFile.name), "absolute");
+        } else {
+          // Create new TODO.md with template
+          const todoPath = await path.join(selectedPath, "TODO.md");
+          const template = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+---
+
+# Tasks
+
+- [ ] First task
+`;
+          await writeTextFile(todoPath, template);
+          await this.loadProject(todoPath, "absolute");
+        }
+      } else {
+        // Direct file selection
+        await this.loadProject(selectedPath, "absolute");
+      }
+    } catch (error) {
+      console.error("Error handling folder or file:", error);
+      throw error;
     }
   }
 
