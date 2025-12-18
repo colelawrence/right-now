@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
+default-run = "rn-desktop-2"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -29,6 +30,17 @@ tauri-plugin-process = "2"
 rodio = { version = "0.17", features = ["symphonia-mp3"] }
 rc-zip-sync = "4.2.4"
 
+# Session daemon dependencies
+tokio = { version = "1", features = ["full", "rt-multi-thread", "macros", "signal", "io-util", "net", "sync", "time", "fs"] }
+portable-pty = "0.8"
+anyhow = "1"
+thiserror = "1"
+dirs = "5"
+fs2 = "0.4"
+regex = "1"
+chrono = { version = "0.4", features = ["serde"] }
+libc = "0.2"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 cocoa = "0.26"
@@ -38,4 +50,21 @@ objc = "0.2.7"
 tauri-plugin-autostart = "2"
 tauri-plugin-positioner = "2"
 tauri-plugin-window-state = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+# Main Tauri application binary
+[[bin]]
+name = "rn-desktop-2"
+path = "src/main.rs"
+
+# Daemon and CLI binaries
+[[bin]]
+name = "right-now-daemon"
+path = "src/bin/right-now-daemon.rs"
+
+[[bin]]
+name = "todo"
+path = "src/bin/todo.rs"
 
