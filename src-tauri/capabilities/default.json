@@ -1,12 +1,22 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main"],
+  "description": "Capability for the main and test windows",
+  "windows": ["main", "test"],
   "permissions": [
     "core:default",
     "store:default",
+    "fs:default",
+    "fs:allow-read-text-file",
+    "fs:allow-write-text-file",
+    "fs:allow-read-dir",
+    "fs:allow-stat",
+    {
+      "identifier": "fs:scope",
+      "allow": ["$HOME/**"]
+    },
     "opener:default",
+    "opener:allow-open-url",
     "process:allow-exit",
     "core:window:allow-center",
     "core:window:allow-set-always-on-top",
@@ -24,6 +34,7 @@
     {
       "identifier": "opener:allow-open-path",
       "allow": [{ "path": "**/*" }]
-    }
+    },
+    "deep-link:default"
   ]
 }

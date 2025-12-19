@@ -6,7 +6,8 @@ import { forwardRef, useEffect, useState } from "react";
 import { StateControls } from "./components/StateControls";
 import { TaskList } from "./components/TaskList";
 import { Timer } from "./components/Timer";
-import type { AppWindows, ISoundManager, ProjectManager, ProjectStore } from "./lib";
+import { Markdown, MarkdownProvider } from "./components/markdown";
+import { type AppWindows, type ISoundManager, type ProjectManager, type ProjectStore, useDeepLink } from "./lib";
 import type { ProjectMarkdown } from "./lib/ProjectStateEditor";
 import type { LoadedProjectState, ProjectFile, WorkState } from "./lib/project";
 import { SoundEventName, WARNING_THRESHOLD_MS } from "./lib/sounds";
@@ -77,6 +78,12 @@ function AppReady({ controllers }: { controllers: AppControllers }) {
   const project = loaded?.projectFile;
   const [isCompact, setIsCompact] = useAtom(appWindows.currentlyMiniAtom);
   const [lastWarningTime, setLastWarningTime] = useState<number>(0);
+
+  // Get the directory containing the project file for resolving relative paths
+  const projectDir = loaded?.fullPath?.split("/").slice(0, -1).join("/");
+
+  // Handle incoming deep links (todos:// protocol)
+  useDeepLink(projectDir);
 
   // Add warning sound effect
   useEffect(() => {
@@ -204,7 +211,11 @@ function AppReady({ controllers }: { controllers: AppControllers }) {
     toggleCompact: () => setIsCompact(!isCompact),
   };
 
-  return isCompact ? <AppCompact {...commonProps} /> : <AppPlanner {...commonProps} />;
+  return (
+    <MarkdownProvider basePath={projectDir}>
+      {isCompact ? <AppCompact {...commonProps} /> : <AppPlanner {...commonProps} />}
+    </MarkdownProvider>
+  );
 }
 
 interface AppViewProps {
@@ -283,7 +294,7 @@ function AppCompact({
         </div>
         {currentTask?.details?.trim() && (
           <div className="absolute top-full left-0 right-0 bg-white/90 p-2 text-sm" data-no-drag>
-            {currentTask?.details}
+            <Markdown>{currentTask.details}</Markdown>
           </div>
         )}
         <div className="flex items-center gap-2 shrink-0">
@@ -319,7 +330,11 @@ function CurrentTaskName({
 }: { currentTask: (ProjectMarkdown & { type: "task" }) | undefined; placeholder: string }) {
   return (
     <div className="text-lg tracking-wide font-medium truncate flex-1 min-w-0 rounded px-2 py-0.5 relative group select-none hover:bg-black/5 transition-colors cursor-default">
-      {currentTask?.name || <span className="text-gray-500">{placeholder}</span>}
+      {currentTask?.name ? (
+        <Markdown inline>{currentTask.name}</Markdown>
+      ) : (
+        <span className="text-gray-500">{placeholder}</span>
+      )}
       {currentTask?.name && (
         <CopyButton
           copyContent={currentTask.name}

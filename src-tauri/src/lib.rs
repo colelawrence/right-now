@@ -4,11 +4,24 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
 use std::sync::{Arc, Mutex};
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::State;
 
 #[cfg(target_os = "macos")]
 #[macro_use]
 extern crate objc;
+
+// Session management module (shared between daemon, CLI, and main app)
+pub mod session;
+
+// CLI paths configuration (shared between app, shim, and daemon)
+pub mod cli_paths;
+
+// Test harness module (only compiled with test-harness feature)
+#[cfg(feature = "test-harness")]
+pub mod test_harness;
+
+use crate::session::config::Config;
 
 // Global state to hold our audio output stream
 #[derive(Clone)]
@@ -129,6 +142,19 @@ async fn play_sound(
 }
 
 #[tauri::command]
+fn set_current_project_path(path: Option<String>) -> Result<(), String> {
+    let config = Config::from_env();
+    match path {
+        Some(p) if !p.trim().is_empty() => config
+            .write_current_project(p.trim())
+            .map_err(|e| format!("Failed to record project path: {}", e)),
+        _ => config
+            .clear_current_project()
+            .map_err(|e| format!("Failed to clear project path: {}", e)),
+    }
+}
+
+#[tauri::command]
 async fn stop_sound(state: State<'_, AudioState>, invocation: u32) -> Result<(), String> {
     if let Some(sink) = state
         .active_sinks
@@ -169,8 +195,193 @@ fn toggle_mini_os_specific_styling(window: tauri::Window, mini: bool) {
     macos_title_bar::hide_window_buttons_each(&window, mini, mini, mini);
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+// ============================================================================
+// CLI Shim Commands
+// ============================================================================
+
+#[derive(serde::Serialize)]
+struct CliShimInfo {
+    name: String,
+    installed: bool,
+    path: Option<String>,
+    install_dir: Option<String>,
+}
+
+#[tauri::command]
+fn get_cli_shim_info() -> CliShimInfo {
+    let status = cli_paths::ShimStatus::check();
+    let install_dir = cli_paths::shim_install_dir().map(|p| p.to_string_lossy().to_string());
+
+    match status {
+        cli_paths::ShimStatus::Installed { path, name } => CliShimInfo {
+            name,
+            installed: true,
+            path: Some(path.to_string_lossy().to_string()),
+            install_dir,
+        },
+        cli_paths::ShimStatus::NotInstalled { name } => CliShimInfo {
+            name,
+            installed: false,
+            path: None,
+            install_dir,
+        },
+        cli_paths::ShimStatus::DirectoryMissing => CliShimInfo {
+            name: cli_paths::DEFAULT_CLI_NAME.to_string(),
+            installed: false,
+            path: None,
+            install_dir,
+        },
+    }
+}
+
+#[tauri::command]
+fn set_cli_name(name: String) -> Result<String, String> {
+    cli_paths::validate_cli_name(&name)?;
+    cli_paths::set_cli_name(&name).map_err(|e| e.to_string())?;
+    Ok(format!("CLI name set to '{}'", name))
+}
+
+#[tauri::command]
+fn install_cli_shim(name: Option<String>) -> Result<String, String> {
+    let cli_name = name.unwrap_or_else(cli_paths::current_cli_name);
+    cli_paths::validate_cli_name(&cli_name)?;
+
+    let path = cli_paths::install_shim_as(&cli_name).map_err(|e| e.to_string())?;
+    Ok(format!("'{}' installed to {}", cli_name, path.display()))
+}
+
+#[tauri::command]
+fn uninstall_cli_shim() -> Result<String, String> {
+    let name = cli_paths::current_cli_name();
+    cli_paths::uninstall_shim().map_err(|e| e.to_string())?;
+    Ok(format!("'{}' CLI uninstalled", name))
+}
+
+const MENU_ID_CLI_SHIM: &str = "cli_shim_toggle";
+
+fn get_shim_menu_text() -> String {
+    let status = cli_paths::ShimStatus::check();
+    let name = status.cli_name();
+    if status.is_installed() {
+        format!("Uninstall '{}' CLI...", name)
+    } else {
+        format!("Install '{}' CLI...", name)
+    }
+}
+
+fn setup_app_menu(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    use tauri::menu::{AboutMetadata, SubmenuBuilder};
+
+    let shim_menu_item =
+        MenuItemBuilder::with_id(MENU_ID_CLI_SHIM, get_shim_menu_text()).build(app)?;
+
+    // Build standard app menu (macOS "AppName" menu, or first menu on other platforms)
+    let app_menu = SubmenuBuilder::new(app, "Right Now")
+        .about(Some(AboutMetadata::default()))
+        .separator()
+        .services()
+        .separator()
+        .hide()
+        .hide_others()
+        .show_all()
+        .separator()
+        .quit()
+        .build()?;
+
+    // Build Edit menu with standard items
+    let edit_menu = SubmenuBuilder::new(app, "Edit")
+        .undo()
+        .redo()
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .build()?;
+
+    // Build Window menu
+    let window_menu = SubmenuBuilder::new(app, "Window")
+        .minimize()
+        .maximize()
+        .separator()
+        .close_window()
+        .build()?;
+
+    // Build Tools menu with our custom item
+    let tools_menu = SubmenuBuilder::new(app, "Tools")
+        .item(&shim_menu_item)
+        .build()?;
+
+    let menu = MenuBuilder::new(app)
+        .item(&app_menu)
+        .item(&edit_menu)
+        .item(&window_menu)
+        .item(&tools_menu)
+        .build()?;
+
+    app.set_menu(menu)?;
+
+    Ok(())
+}
+
+fn handle_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
+    use tauri_plugin_dialog::DialogExt;
+
+    match event.id().0.as_str() {
+        MENU_ID_CLI_SHIM => {
+            let status = cli_paths::ShimStatus::check();
+            let result = if status.is_installed() {
+                cli_paths::uninstall_shim().map(|_| "CLI uninstalled successfully".to_string())
+            } else {
+                cli_paths::install_shim().map(|path| format!("CLI installed to {}", path.display()))
+            };
+
+            // Update the menu item text
+            if let Some(menu) = app.menu() {
+                if let Some(item) = menu.get(MENU_ID_CLI_SHIM) {
+                    if let Some(menu_item) = item.as_menuitem() {
+                        let _ = menu_item.set_text(get_shim_menu_text());
+                    }
+                }
+            }
+
+            // Show result dialog
+            match result {
+                Ok(msg) => {
+                    let status = cli_paths::ShimStatus::check();
+                    let name = status.cli_name();
+                    let path_hint = if cfg!(windows) {
+                        "%USERPROFILE%\\bin"
+                    } else {
+                        "~/.local/bin"
+                    };
+                    let detail = if status.is_installed() {
+                        format!(
+                            "{}\n\nYou can now use '{}' from your terminal.\n\nMake sure {} is in your PATH.",
+                            msg, name, path_hint
+                        )
+                    } else {
+                        msg
+                    };
+                    app.dialog()
+                        .message(detail)
+                        .title("CLI Tool")
+                        .blocking_show();
+                }
+                Err(e) => {
+                    app.dialog()
+                        .message(format!("Failed: {}", e))
+                        .title("Error")
+                        .blocking_show();
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Create the base Tauri builder with all standard plugins
+fn create_base_builder() -> tauri::Builder<tauri::Wry> {
     tauri::Builder::default()
         .plugin(tauri_nspanel::init())
         .plugin(tauri_plugin_process::init())
@@ -179,34 +390,121 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_positioner::init())
         .plugin(tauri_plugin_fs::init())
-        .setup(|app| {
-            use tauri::Manager;
-            // Initialize audio state - now won't panic if audio init fails
-            let (audio_state, _audio_output) = AudioState::new();
-            std::mem::forget(_audio_output); // put me in jail
+        .plugin(tauri_plugin_deep_link::init())
+}
 
-            // Log audio initialization status
-            if audio_state.stream_handle.is_none() {
-                eprintln!("Warning: Audio device not available - sound effects will be disabled");
+/// Standard app setup (shared between normal and test harness modes)
+fn setup_app(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    use tauri::Manager;
+
+    // Initialize audio state - now won't panic if audio init fails
+    let (audio_state, _audio_output) = AudioState::new();
+    std::mem::forget(_audio_output); // put me in jail
+
+    // Log audio initialization status
+    if audio_state.stream_handle.is_none() {
+        eprintln!("Warning: Audio device not available - sound effects will be disabled");
+    }
+
+    app.manage(audio_state);
+
+    // Write CLI paths so the shim can find our binaries
+    if let Err(e) = cli_paths::CliPaths::write_from_current_exe() {
+        eprintln!("Warning: Failed to write CLI paths: {}", e);
+    }
+
+    // Setup application menu with CLI shim install option
+    setup_app_menu(app)?;
+
+    #[cfg(desktop)]
+    app.handle()
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
+        .map_err(|e| {
+            println!("Error initializing autostart plugin: {}", e);
+            e
+        })?;
+
+    Ok(())
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    create_base_builder()
+        .setup(|app| setup_app(app))
+        .on_menu_event(handle_menu_event)
+        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![
+            play_sound,
+            stop_sound,
+            list_sound_variations,
+            toggle_mini_os_specific_styling,
+            set_current_project_path,
+            get_cli_shim_info,
+            set_cli_name,
+            install_cli_shim,
+            uninstall_cli_shim
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+
+/// Create a test harness builder (context must be passed from the binary)
+/// This version includes additional commands for test control and starts a Unix socket server
+#[cfg(feature = "test-harness")]
+pub fn create_test_harness_builder() -> tauri::Builder<tauri::Wry> {
+    use std::sync::Arc;
+
+    // Create test harness state
+    let harness_state = Arc::new(test_harness::TestHarnessState::new());
+
+    // Clone for the setup closure
+    let harness_state_for_setup = Arc::clone(&harness_state);
+
+    create_base_builder()
+        .setup(move |app| {
+            use tauri::Manager;
+
+            // Standard app setup (but skip audio for faster tests)
+            // Note: We don't initialize audio in test mode to avoid noise
+
+            // Write CLI paths so the shim can find our binaries
+            if let Err(e) = cli_paths::CliPaths::write_from_current_exe() {
+                eprintln!("Warning: Failed to write CLI paths: {}", e);
             }
 
-            app.manage(audio_state);
+            // Manage the test harness state
+            let harness_state = Arc::clone(&harness_state_for_setup);
+            app.manage(harness_state.clone());
 
-            // let window = app.get_webview_window("main").unwrap();
-            // #[cfg(debug_assertions)] // only include this code on debug builds
-            // window.open_devtools();
+            // Set the app handle so the harness can emit events
+            let app_handle = app.handle().clone();
+            let harness_for_handle = harness_state.clone();
+            tauri::async_runtime::spawn(async move {
+                harness_for_handle.set_app_handle(app_handle).await;
+            });
 
-            // FUTURE: Manage the NS Panel properly
-            // #[cfg(target_os = "macos")]
-            // {
-            //     use tauri_nspanel::WebviewWindowExt;
-            //     let window = app.get_webview_window("main").unwrap();
-            //     let panel = window.to_panel().unwrap();
-            //     panel.set_released_when_closed(true);
-            //     panel.set_floating_panel(true);
-            //     app.manage(panel);
-            //     println!("Created panel");
-            // }
+            // Start the Unix socket server for test control
+            let socket_path = test_harness::default_socket_path();
+            let state_for_server = harness_state;
+
+            // We need a tokio runtime for the server
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+                rt.block_on(async {
+                    match test_harness::start_server(socket_path, state_for_server).await {
+                        Ok(mut shutdown_rx) => {
+                            // Wait for shutdown signal
+                            let _ = shutdown_rx.recv().await;
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to start test harness server: {}", e);
+                        }
+                    }
+                });
+            });
 
             #[cfg(desktop)]
             app.handle()
@@ -218,15 +516,29 @@ pub fn run() {
                     println!("Error initializing autostart plugin: {}", e);
                     e
                 })?;
+
             Ok(())
         })
+        .on_menu_event(handle_menu_event)
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            // Standard commands (but play_sound is a no-op in test mode)
             play_sound,
             stop_sound,
             list_sound_variations,
-            toggle_mini_os_specific_styling
+            toggle_mini_os_specific_styling,
+            set_current_project_path,
+            get_cli_shim_info,
+            set_cli_name,
+            install_cli_shim,
+            uninstall_cli_shim,
+            // Test harness commands
+            test_harness::test_create_temp_dir,
+            test_harness::test_load_fixture,
+            test_harness::test_list_fixtures,
+            test_harness::test_cleanup_all,
+            test_harness::test_get_socket_path,
+            test_harness::test_respond,
+            test_harness::test_set_app_handle
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
 }

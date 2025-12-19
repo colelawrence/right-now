@@ -3,6 +3,13 @@
   "productName": "Right Now",
   "version": "0.1.1",
   "identifier": "com.colelawrence.rightnow",
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["todos"]
+      }
+    }
+  },
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
