@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Right Now Test Harness",
+  "version": "0.1.1",
+  "identifier": "com.colelawrence.rightnow.test",
+  "build": {
+    "beforeDevCommand": "bun run dev:test",
+    "devUrl": "http://localhost:1421",
+    "beforeBuildCommand": "bun run build:test",
+    "frontendDist": "../dist-test"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "test",
+        "title": "Right Now - Test Harness",
+        "width": 1200,
+        "height": 800,
+        "resizable": true,
+        "decorations": true,
+        "theme": "Light"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": []
+  }
+}
