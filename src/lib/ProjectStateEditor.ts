@@ -1,13 +1,75 @@
 import matter from "gray-matter";
 
 const TASK_RE = /^(\s*[-\*]?\s*)\[([xX\s])\]\s+(.*)$/;
-function parseTaskLine(line: string): { prefix: string; complete: string | false; name: string } | null {
+
+/**
+ * Regex for extracting session badge from task name.
+ * Matches: [Status](todos://session/<id>) at end of line
+ * Status can be: Running, Stopped, Waiting
+ */
+const SESSION_BADGE_RE = /\s+\[(Running|Stopped|Waiting)\]\(todos:\/\/session\/(\d+)\)$/;
+
+/**
+ * Session status type matching the daemon protocol
+ */
+export type SessionStatus = "Running" | "Stopped" | "Waiting";
+
+/**
+ * Session info extracted from a task's session badge
+ */
+export interface TaskSessionStatus {
+  status: SessionStatus;
+  sessionId: number;
+}
+
+/**
+ * Extract session badge from task name, returning the clean name and session status
+ */
+function extractSessionBadge(fullName: string): {
+  name: string;
+  sessionStatus: TaskSessionStatus | null;
+} {
+  const match = fullName.match(SESSION_BADGE_RE);
+  if (!match) {
+    return { name: fullName, sessionStatus: null };
+  }
+
+  const status = match[1] as SessionStatus;
+  const sessionId = parseInt(match[2], 10);
+
+  // Remove badge from name
+  const name = fullName.replace(SESSION_BADGE_RE, "");
+
+  return {
+    name,
+    sessionStatus: { status, sessionId },
+  };
+}
+
+/**
+ * Format a session badge for insertion into a task line
+ */
+export function formatSessionBadge(status: SessionStatus, sessionId: number): string {
+  return ` [${status}](todos://session/${sessionId})`;
+}
+
+function parseTaskLine(line: string): {
+  prefix: string;
+  complete: string | false;
+  name: string;
+  sessionStatus: TaskSessionStatus | null;
+} | null {
   const match = line.match(TASK_RE);
   if (!match) return null;
+
+  const fullName = match[3];
+  const { name, sessionStatus } = extractSessionBadge(fullName);
+
   return {
     prefix: match[1],
     complete: match[2].trim() || false,
-    name: match[3],
+    name,
+    sessionStatus,
   };
 }
 function parseHeadingLine(line: string): { level: number; text: string } | null {
@@ -17,10 +79,22 @@ function parseHeadingLine(line: string): { level: number; text: string } | null 
 }
 
 /**
- * The ProjectMarkdown type you mentioned:
+ * Task block with optional session status
+ */
+export interface TaskBlock {
+  type: "task";
+  name: string;
+  details: string | null;
+  complete: string | false;
+  prefix: string;
+  sessionStatus: TaskSessionStatus | null;
+}
+
+/**
+ * The ProjectMarkdown type represents parsed markdown blocks
  */
 export type ProjectMarkdown =
-  | { type: "task"; name: string; details: string | null; complete: string | false; prefix: string }
+  | TaskBlock
   | { type: "heading"; level: number; text: string }
   | { type: "unrecognized"; markdown: string };
 
@@ -186,11 +260,13 @@ function stringifyProjectMarkdown(blocks: ProjectMarkdown[]): string {
           return `${hashes} ${block.text}`;
         }
         case "task": {
-          // For simplicity, assume unchecked tasks use [ ], and if the user
-          // wanted to store "done" or "checked" tasks, they'd be recognized differently.
-          // But you can store it in the 'name' if you want to track [x].
-          // Here we're simply returning as " - []" with the text.
-          const lines = [`- [${block.complete || " "}] ${block.name}`];
+          // Build the task line with optional session badge
+          // Preserve the original prefix (indentation + bullet style) if available
+          const prefix = block.prefix || "- ";
+          const badge = block.sessionStatus
+            ? formatSessionBadge(block.sessionStatus.status, block.sessionStatus.sessionId)
+            : "";
+          const lines = [`${prefix}[${block.complete || " "}] ${block.name}${badge}`];
           if (block.details) {
             lines.push(block.details);
           }

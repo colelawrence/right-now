@@ -1,5 +1,6 @@
 import { IconCheckbox, IconSquare } from "@tabler/icons-react";
 import type { ProjectMarkdown } from "../lib/ProjectStateEditor";
+import { Markdown } from "./markdown";
 
 interface TaskListProps {
   tasks: ProjectMarkdown[];
@@ -42,8 +43,14 @@ export function TaskList({ tasks, onCompleteTask }: TaskListProps) {
                     {item.complete ? <IconCheckbox size={16} /> : <IconSquare size={16} />}
                   </button>
                   <div className="flex-1">
-                    <div className={item.complete ? "line-through text-gray-500" : ""}>{item.name}</div>
-                    {item.details && <div className="text-sm text-gray-600 mt-1">{item.details}</div>}
+                    <div className={item.complete ? "line-through text-gray-500" : ""}>
+                      <Markdown inline>{item.name}</Markdown>
+                    </div>
+                    {item.details && (
+                      <div className="text-sm text-gray-600 mt-1">
+                        <Markdown>{item.details}</Markdown>
+                      </div>
+                    )}
                   </div>
                 </div>
               );
@@ -58,7 +65,7 @@ export function TaskList({ tasks, onCompleteTask }: TaskListProps) {
               <h2
                 className={`font-medium ${section.heading.level === 1 ? "text-xl" : "text-lg"} pb-2 border-b border-gray-200 mt-0`}
               >
-                {section.heading.text}
+                <Markdown inline>{section.heading.text}</Markdown>
               </h2>
             )}
             <div className="space-y-2 pl-1">{itemElements}</div>

@@ -1,7 +1,10 @@
 import { path } from "@tauri-apps/api";
+import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { type DirEntry, readDir, readTextFile, stat, writeTextFile } from "@tauri-apps/plugin-fs";
 import { type ProjectFile, ProjectStateEditor } from "./ProjectStateEditor";
+import type { Clock } from "./clock";
+import { realClock } from "./clock";
 import type { ProjectStore } from "./store";
 import { FileWatcher } from "./watcher";
 import { withError } from "./withError";
@@ -31,12 +34,14 @@ type ProjectChangeCallback = (project: Readonly<LoadedProjectState> | undefined)
 
 export class ProjectManager {
   private projectStore: ProjectStore;
+  private clock: Clock;
   private watcher: FileWatcher;
   private currentFile?: Readonly<LoadedProjectState>;
   private changeListeners: Set<ProjectChangeCallback> = new Set();
 
-  constructor(projectStore: ProjectStore) {
+  constructor(projectStore: ProjectStore, clock: Clock = realClock) {
     this.projectStore = projectStore;
+    this.clock = clock;
     this.watcher = new FileWatcher();
   }
 
@@ -124,7 +129,7 @@ pomodoro_settings:
           virtual: type === "virtual",
           workState: "planning",
           stateTransitions: {
-            startedAt: Date.now(),
+            startedAt: this.clock.now(),
           },
         };
       }
@@ -137,6 +142,15 @@ pomodoro_settings:
 
     // Set up file watcher for external changes
     await this.watcher.watchProject(fullPath, reload);
+
+    if (type === "absolute") {
+      // Record the current project path for CLI fallbacks
+      try {
+        await invoke("set_current_project_path", { path: fullPath });
+      } catch (error) {
+        console.warn("Failed to record current project path", error);
+      }
+    }
   }
 
   subscribe(callback: ProjectChangeCallback): () => void {
@@ -161,7 +175,7 @@ pomodoro_settings:
     // Only update if state is actually changing
     if (this.currentFile.workState === newState) return;
 
-    const startedAt = Date.now();
+    const startedAt = this.clock.now();
     this.currentFile = {
       ...this.currentFile,
       workState: newState,

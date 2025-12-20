@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import type { Clock } from "../lib/clock";
+import { realClock } from "../lib/clock";
 import { cn } from "./utils/cn";
 
 interface TimerProps {
@@ -9,6 +11,8 @@ interface TimerProps {
   className?: string;
   /** Directly edited the timer and this is the difference between the new time and the original time */
   onAdjustTime?: (ms: number) => void;
+  /** Clock instance for time operations (defaults to realClock) */
+  clock?: Clock;
 }
 
 const TIME_PATTERNS = [
@@ -61,21 +65,21 @@ function parseTimeInput(input: string): { ms: number } | null {
   return null;
 }
 
-export function Timer({ startTime, endTime, className, onAdjustTime }: TimerProps) {
-  const [time, setTime] = useState(Date.now());
+export function Timer({ startTime, endTime, className, onAdjustTime, clock = realClock }: TimerProps) {
+  const [time, setTime] = useState(clock.now());
   const [isEditing, setIsEditing] = useState(false);
   const [inputError, setInputError] = useState(false);
   const [isCountingDown, setIsCountingDown] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const interval = setInterval(() => {
+    const intervalId = clock.setInterval(() => {
       if (!isEditing) {
-        setTime(Date.now());
+        setTime(clock.now());
       }
     }, 500);
-    return () => clearInterval(interval);
-  }, [isEditing]);
+    return () => clock.clearInterval(intervalId);
+  }, [isEditing, clock]);
 
   // Calculate delta based on mode.
   let delta: number;
