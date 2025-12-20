@@ -6,7 +6,10 @@ import ReactDOM from "react-dom/client";
 import "./styles.css";
 import { getDefaultStore } from "jotai";
 import AppReady from "./App";
+import { type Clock, realClock } from "./lib/clock";
+import { AppEventBus, type EventBus } from "./lib/events";
 import { ProjectManager } from "./lib/project";
+import { createSoundPlayer } from "./lib/sound-player";
 import { ISoundManager } from "./lib/sounds";
 import { ProjectStore } from "./lib/store";
 import { AppWindows } from "./lib/windows";
@@ -20,6 +23,8 @@ interface AppControllers {
   appWindows: AppWindows;
   projectStore: ProjectStore;
   soundManager: ISoundManager;
+  clock: Clock;
+  eventBus: EventBus;
 }
 
 // Initialize app controllers
@@ -33,13 +38,18 @@ async function initializeApp() {
     // Initialize core services
     const projectStore = await ProjectStore.initialize();
     console.info("Store initialized");
-    const projectManager = new ProjectManager(projectStore);
+    const projectManager = new ProjectManager(projectStore, realClock);
     console.info("Project manager initialized");
     const appWindows = new AppWindows();
     await appWindows.initialize();
     console.info("App windows initialized");
     const soundManager = await ISoundManager.initialize(jotaiStore);
     console.info("Sound manager initialized");
+
+    // Create EventBus and wire up SoundPlayer
+    const eventBus = new AppEventBus();
+    const soundPlayer = createSoundPlayer(eventBus, soundManager);
+    console.info("EventBus and SoundPlayer initialized");
 
     // Wire up project change listeners
     projectManager.subscribe(async (loaded) => {
@@ -82,7 +92,7 @@ async function initializeApp() {
       }
     });
 
-    controllers = { projectManager, appWindows, projectStore, soundManager };
+    controllers = { projectManager, appWindows, projectStore, soundManager, clock: realClock, eventBus };
 
     // Try to load last active project
     const lastProject = await projectStore.getLastActiveProject();

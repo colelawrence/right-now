@@ -2,21 +2,30 @@ import { IconCheck, IconClipboard, IconEdit } from "@tabler/icons-react";
 import { Window } from "@tauri-apps/api/window";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { useAtom } from "jotai";
-import { forwardRef, useEffect, useState } from "react";
+import { forwardRef, useEffect, useRef, useState } from "react";
 import { StateControls } from "./components/StateControls";
 import { TaskList } from "./components/TaskList";
 import { Timer } from "./components/Timer";
 import { Markdown, MarkdownProvider } from "./components/markdown";
 import { type AppWindows, type ISoundManager, type ProjectManager, type ProjectStore, useDeepLink } from "./lib";
 import type { ProjectMarkdown } from "./lib/ProjectStateEditor";
+import type { Clock } from "./lib/clock";
+import type { EventBus } from "./lib/events";
 import type { LoadedProjectState, ProjectFile, WorkState } from "./lib/project";
-import { SoundEventName, WARNING_THRESHOLD_MS } from "./lib/sounds";
+import {
+  type TimerState,
+  computeStateChangeEvents,
+  computeTaskCompletedEvents,
+  computeTimerEvents,
+} from "./lib/timer-logic";
 
 interface AppControllers {
   projectManager: ProjectManager;
   appWindows: AppWindows;
   projectStore: ProjectStore;
   soundManager: ISoundManager;
+  clock: Clock;
+  eventBus: EventBus;
 }
 
 interface AppProps {
@@ -73,11 +82,11 @@ function useLoadedProject(projectManager: ProjectManager) {
 }
 
 function AppReady({ controllers }: { controllers: AppControllers }) {
-  const { projectManager, appWindows, projectStore, soundManager } = controllers;
+  const { projectManager, appWindows, projectStore, soundManager, clock, eventBus } = controllers;
   const loaded = useLoadedProject(projectManager);
   const project = loaded?.projectFile;
   const [isCompact, setIsCompact] = useAtom(appWindows.currentlyMiniAtom);
-  const [lastWarningTime, setLastWarningTime] = useState<number>(0);
+  const timerStateRef = useRef<Partial<TimerState>>({});
 
   // Get the directory containing the project file for resolving relative paths
   const projectDir = loaded?.fullPath?.split("/").slice(0, -1).join("/");
@@ -85,30 +94,38 @@ function AppReady({ controllers }: { controllers: AppControllers }) {
   // Handle incoming deep links (todos:// protocol)
   useDeepLink(projectDir);
 
-  // Add warning sound effect
+  // Timer warning effect using pure computeTimerEvents function
   useEffect(() => {
     if (!loaded || loaded.workState === "planning") return;
     const endsAt = loaded.stateTransitions.endsAt;
     if (!endsAt) return;
-    const checkWarning = async () => {
-      const now = Date.now();
-      const timeLeft = endsAt - now;
 
-      // Only play warning once per state when we cross the threshold
-      if (timeLeft <= WARNING_THRESHOLD_MS && now - lastWarningTime > WARNING_THRESHOLD_MS) {
-        setLastWarningTime(now);
-        if (loaded.workState === "working") {
-          soundManager.playSound(SoundEventName.BreakApproaching);
-        } else if (loaded.workState === "break") {
-          soundManager.playSound(SoundEventName.BreakEndApproaching);
-        }
+    const checkTimer = () => {
+      const now = clock.now();
+      const timerState: TimerState = {
+        workState: loaded.workState,
+        startedAt: loaded.stateTransitions.startedAt,
+        endsAt,
+        lastWarningAt: timerStateRef.current.lastWarningAt,
+      };
+
+      const result = computeTimerEvents(timerState, now);
+
+      // Emit all computed events via EventBus
+      for (const event of result.events) {
+        eventBus.emit(event);
+      }
+
+      // Apply state updates (for warning deduplication)
+      if (result.nextState.lastWarningAt !== undefined) {
+        timerStateRef.current.lastWarningAt = result.nextState.lastWarningAt;
       }
     };
 
     // Check every 5 seconds
-    const interval = setInterval(checkWarning, 5000);
-    return () => clearInterval(interval);
-  }, [loaded, soundManager, lastWarningTime]);
+    const intervalId = clock.setInterval(checkTimer, 5000);
+    return () => clock.clearInterval(intervalId);
+  }, [loaded, eventBus, clock]);
 
   const handleCompleteTask = (task: ProjectMarkdown & { type: "task" }, draft: ProjectFile) => {
     // Find the completion mark style from other completed tasks
@@ -125,7 +142,11 @@ function AppReady({ controllers }: { controllers: AppControllers }) {
     if (taskToComplete) {
       taskToComplete.complete = taskToComplete.complete ? false : completionMark;
       if (taskToComplete.complete) {
-        soundManager.playSound(SoundEventName.TodoComplete);
+        // Emit task completion events via EventBus
+        const events = computeTaskCompletedEvents(task.name, clock.now());
+        for (const event of events) {
+          eventBus.emit(event);
+        }
       }
       return true;
     }
@@ -135,7 +156,6 @@ function AppReady({ controllers }: { controllers: AppControllers }) {
   const handleStateChange = async (newState: WorkState) => {
     let shouldCollapse = false;
     let shouldExpand = false;
-    let shouldPlaySound: SoundEventName | undefined;
 
     // Handle window state changes based on current state
     if (!loaded) return;
@@ -148,19 +168,8 @@ function AppReady({ controllers }: { controllers: AppControllers }) {
       setIsCompact(false);
     }
 
-    // Determine sound to play based on new state
-    if (loaded.workState === "planning" && newState === "working") {
-      shouldPlaySound = SoundEventName.SessionStart;
-    } else if (newState === "working") {
-      shouldPlaySound = SoundEventName.WorkResumed;
-    } else if (newState === "planning") {
-      shouldPlaySound = SoundEventName.SessionEnd;
-    } else if (newState === "break") {
-      shouldPlaySound = SoundEventName.BreakStart;
-    }
-
     // Reset warning time when state changes
-    setLastWarningTime(0);
+    timerStateRef.current.lastWarningAt = undefined;
 
     // Update the work state and wait for it to propagate
     await projectManager.updateWorkState(newState);
@@ -168,9 +177,10 @@ function AppReady({ controllers }: { controllers: AppControllers }) {
     // Wait a tick for React state to update
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // Play sound if state changed
-    if (shouldPlaySound) {
-      await soundManager.playSound(shouldPlaySound);
+    // Emit state change events via EventBus (including sound events)
+    const stateChangeEvents = computeStateChangeEvents(loaded.workState, newState, clock.now());
+    for (const event of stateChangeEvents) {
+      eventBus.emit(event);
     }
 
     // Update window format based on state
@@ -183,7 +193,7 @@ function AppReady({ controllers }: { controllers: AppControllers }) {
 
   const handleTimeAdjust = async (ms: number) => {
     await projectManager.updateStateTransitions({
-      endsAt: Date.now() + ms,
+      endsAt: clock.now() + ms,
     });
   };
 
@@ -202,6 +212,7 @@ function AppReady({ controllers }: { controllers: AppControllers }) {
     project: loaded,
     loaded,
     endTime,
+    clock,
     onStateChange: handleStateChange,
     onTimeAdjust: handleTimeAdjust,
     onOpenProject: () => projectManager.openProject(),
@@ -222,6 +233,7 @@ interface AppViewProps {
   project: LoadedProjectState;
   loaded: LoadedProjectState | undefined;
   endTime: number;
+  clock: Clock;
   onStateChange: (newState: WorkState) => void;
   onTimeAdjust: (ms: number) => void;
   onOpenProject: () => void;
@@ -252,6 +264,7 @@ function AppCompact({
   project,
   loaded,
   endTime,
+  clock,
   onStateChange,
   onTimeAdjust,
   onCompleteTask,
@@ -315,6 +328,7 @@ function AppCompact({
               endTime={endTime}
               className="text-sm font-mono py-0"
               onAdjustTime={onTimeAdjust}
+              clock={clock}
             />
           )}
           <StateControls project={project} onStateChange={onStateChange} compact toggleCompact={toggleCompact} />
@@ -370,6 +384,7 @@ function AppPlanner({
   project,
   loaded,
   endTime,
+  clock,
   onStateChange,
   onTimeAdjust,
   onCompleteTask,
@@ -400,6 +415,7 @@ function AppPlanner({
               endTime={endTime}
               className="text-sm font-mono text-gray-600 py-0"
               onAdjustTime={onTimeAdjust}
+              clock={clock}
             />
           )}
         </div>
