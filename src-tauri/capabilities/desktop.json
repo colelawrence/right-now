@@ -9,6 +9,7 @@
     "dialog:default",
     "fs:allow-read-text-file",
     "fs:allow-write-text-file",
+    "fs:allow-rename",
     "fs:allow-watch",
     "fs:allow-unwatch",
     "fs:allow-read-dir",

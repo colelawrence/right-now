@@ -1,7 +1,7 @@
 import { path } from "@tauri-apps/api";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { type DirEntry, readDir, readTextFile, stat, writeTextFile } from "@tauri-apps/plugin-fs";
+import { type DirEntry, readDir, readTextFile, rename, stat, writeTextFile } from "@tauri-apps/plugin-fs";
 import { type ProjectFile, ProjectStateEditor } from "./ProjectStateEditor";
 import type { Clock } from "./clock";
 import { realClock } from "./clock";
@@ -39,10 +39,25 @@ export class ProjectManager {
   private currentFile?: Readonly<LoadedProjectState>;
   private changeListeners: Set<ProjectChangeCallback> = new Set();
 
+  /** Serialize state/file operations to avoid races between watcher reloads and user actions. */
+  private opChain: Promise<void> = Promise.resolve();
+
+  /** Incremented whenever a new project load is requested. Used to ignore stale reloads. */
+  private loadToken = 0;
+
   constructor(projectStore: ProjectStore, clock: Clock = realClock) {
     this.projectStore = projectStore;
     this.clock = clock;
     this.watcher = new FileWatcher();
+  }
+
+  private enqueueOp<T>(op: () => Promise<T>): Promise<T> {
+    const next = this.opChain.then(op, op);
+    this.opChain = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
   }
 
   async openProject(defaultProject?: string) {
@@ -104,53 +119,90 @@ pomodoro_settings:
 
   async loadProject(filePath: string, type: "absolute" | "virtual"): Promise<void> {
     const fullPath = type === "absolute" ? filePath : await path.resolve(await path.appDataDir(), filePath);
-    const reload = async () => {
-      const textContent = await readTextFile(fullPath).catch(
-        withError((err) => `Error reading file (${fullPath}): ${JSON.stringify(err)}`, ProjectError),
-      );
-      if (this.currentFile && this.currentFile.fullPath === fullPath && this.currentFile.textContent === textContent) {
-        console.info("Skipping load of project", fullPath, "because it's already loaded");
+
+    // Bump token and stop the previous watcher *immediately* to prevent old files from "winning" later.
+    const token = ++this.loadToken;
+    this.watcher.cleanup();
+
+    return await this.enqueueOp(async () => {
+      if (token !== this.loadToken) return;
+
+      const reloadImpl = async () => {
+        if (token !== this.loadToken) return;
+
+        const textContent = await readTextFile(fullPath).catch(
+          withError((err) => `Error reading file (${fullPath}): ${JSON.stringify(err)}`, ProjectError),
+        );
+
+        if (token !== this.loadToken) return;
+
+        if (this.currentFile?.fullPath === fullPath && this.currentFile.textContent === textContent) {
+          return;
+        }
+
+        let projectFile: ProjectFile;
+        try {
+          projectFile = ProjectStateEditor.parse(textContent);
+        } catch (error) {
+          // This can happen while the user is mid-edit (invalid YAML/frontmatter, partial saves, etc).
+          // Keep the last known-good state and try again on the next watcher event.
+          console.error("Failed to parse project file", { fullPath, error });
+          return;
+        }
+
+        if (token !== this.loadToken) return;
+
+        if (this.currentFile?.fullPath === fullPath) {
+          this.currentFile = {
+            ...this.currentFile,
+            textContent,
+            projectFile,
+          };
+        } else {
+          this.currentFile = {
+            fullPath,
+            textContent,
+            projectFile,
+            virtual: type === "virtual",
+            workState: "planning",
+            stateTransitions: {
+              startedAt: this.clock.now(),
+            },
+          };
+        }
+
+        await this.notifySubscribers(this.currentFile);
+      };
+
+      // Initial load
+      await reloadImpl();
+
+      if (token !== this.loadToken) return;
+
+      // Update recent projects in store
+      await this.projectStore.addRecentProject(fullPath);
+
+      if (token !== this.loadToken) return;
+
+      // Set up file watcher for external changes.
+      // Queue reloads so they don't race with other state transitions/writes.
+      await this.watcher.watchProject(fullPath, () => this.enqueueOp(reloadImpl));
+
+      // If a different project load was requested while setting up the watcher, undo it.
+      if (token !== this.loadToken) {
+        this.watcher.cleanup();
         return;
       }
-      const projectFile = ProjectStateEditor.parse(textContent);
-      if (this.currentFile && this.currentFile.fullPath === fullPath) {
-        // Initialize with planning state
-        this.currentFile = {
-          ...this.currentFile,
-          textContent,
-          projectFile,
-        };
-      } else {
-        // Initialize with planning state
-        this.currentFile = {
-          fullPath,
-          textContent,
-          projectFile,
-          virtual: type === "virtual",
-          workState: "planning",
-          stateTransitions: {
-            startedAt: this.clock.now(),
-          },
-        };
+
+      if (type === "absolute") {
+        // Record the current project path for CLI fallbacks
+        try {
+          await invoke("set_current_project_path", { path: fullPath });
+        } catch (error) {
+          console.warn("Failed to record current project path", error);
+        }
       }
-      await this.notifySubscribers(this.currentFile);
-    };
-
-    await reload();
-    // Update recent projects in store
-    await this.projectStore.addRecentProject(fullPath);
-
-    // Set up file watcher for external changes
-    await this.watcher.watchProject(fullPath, reload);
-
-    if (type === "absolute") {
-      // Record the current project path for CLI fallbacks
-      try {
-        await invoke("set_current_project_path", { path: fullPath });
-      } catch (error) {
-        console.warn("Failed to record current project path", error);
-      }
-    }
+    });
   }
 
   subscribe(callback: ProjectChangeCallback): () => void {
@@ -160,48 +212,116 @@ pomodoro_settings:
   }
 
   async updateProject(fn: (project: ProjectFile) => void | boolean) {
-    if (!this.currentFile) return;
-    const project = structuredClone(this.currentFile.projectFile);
-    if (fn(project) === false) return;
-    this.currentFile = { ...this.currentFile, projectFile: project };
-    const updatedContent = ProjectStateEditor.update(this.currentFile.textContent, project);
-    await writeTextFile(this.currentFile.fullPath, updatedContent);
-    await this.notifySubscribers(this.currentFile);
+    return await this.enqueueOp(async () => {
+      if (!this.currentFile) return;
+
+      const fullPath = this.currentFile.fullPath;
+      const token = this.loadToken;
+
+      // Always read fresh before writing to avoid clobbering edits from the user, editor, or daemon.
+      const freshContent = await readTextFile(fullPath).catch(
+        withError((err) => `Error reading file (${fullPath}): ${JSON.stringify(err)}`, ProjectError),
+      );
+
+      // If a different project load was requested mid-operation, bail.
+      if (token !== this.loadToken) return;
+
+      let freshProjectFile: ProjectFile;
+      try {
+        freshProjectFile = ProjectStateEditor.parse(freshContent);
+      } catch (error) {
+        // The file might be mid-edit (invalid YAML/frontmatter, partial saves, etc).
+        // Avoid clobbering it; wait for the next reload to restore a valid state.
+        console.error("Failed to parse fresh project file before write", { fullPath, error });
+        return;
+      }
+
+      const draft = structuredClone(freshProjectFile);
+
+      if (fn(draft) === false) return;
+
+      let updatedContent: string;
+      try {
+        updatedContent = ProjectStateEditor.update(freshContent, draft);
+      } catch (error) {
+        console.error("Failed to update project file content", { fullPath, error });
+        return;
+      }
+
+      // No-op write: still refresh in-memory content if it drifted.
+      if (updatedContent === freshContent) {
+        if (this.currentFile?.fullPath === fullPath && this.currentFile.textContent !== freshContent) {
+          this.currentFile = {
+            ...this.currentFile,
+            textContent: freshContent,
+            projectFile: freshProjectFile,
+          };
+          await this.notifySubscribers(this.currentFile);
+        }
+        return;
+      }
+
+      await this.writeTextFileAtomic(fullPath, updatedContent);
+
+      // Update in-memory state to match what we just wrote (prevents a redundant watcher reload).
+      if (token !== this.loadToken) return;
+      if (!this.currentFile || this.currentFile.fullPath !== fullPath) return;
+
+      let projectFile: ProjectFile;
+      try {
+        projectFile = ProjectStateEditor.parse(updatedContent);
+      } catch {
+        // Shouldn't happen since we generated the content, but be defensive.
+        projectFile = draft;
+      }
+
+      this.currentFile = {
+        ...this.currentFile,
+        textContent: updatedContent,
+        projectFile,
+      };
+
+      await this.notifySubscribers(this.currentFile);
+    });
   }
 
   async updateWorkState(newState: WorkState): Promise<void> {
-    if (!this.currentFile) return;
+    return await this.enqueueOp(async () => {
+      if (!this.currentFile) return;
 
-    // Only update if state is actually changing
-    if (this.currentFile.workState === newState) return;
+      // Only update if state is actually changing
+      if (this.currentFile.workState === newState) return;
 
-    const startedAt = this.clock.now();
-    this.currentFile = {
-      ...this.currentFile,
-      workState: newState,
-      stateTransitions: {
-        startedAt,
-        endsAt:
-          newState === "working"
-            ? startedAt + this.currentFile.projectFile.pomodoroSettings.workDuration * 60 * 1000
-            : newState === "break"
-              ? startedAt + this.currentFile.projectFile.pomodoroSettings.breakDuration * 60 * 1000
-              : undefined,
-      },
-    };
+      const startedAt = this.clock.now();
+      this.currentFile = {
+        ...this.currentFile,
+        workState: newState,
+        stateTransitions: {
+          startedAt,
+          endsAt:
+            newState === "working"
+              ? startedAt + this.currentFile.projectFile.pomodoroSettings.workDuration * 60 * 1000
+              : newState === "break"
+                ? startedAt + this.currentFile.projectFile.pomodoroSettings.breakDuration * 60 * 1000
+                : undefined,
+        },
+      };
 
-    await this.notifySubscribers(this.currentFile);
+      await this.notifySubscribers(this.currentFile);
+    });
   }
 
   async updateStateTransitions(transitions: Partial<StateTransition>): Promise<void> {
-    if (!this.currentFile) return;
+    return await this.enqueueOp(async () => {
+      if (!this.currentFile) return;
 
-    this.currentFile = {
-      ...this.currentFile,
-      stateTransitions: { ...this.currentFile.stateTransitions, ...transitions },
-    };
+      this.currentFile = {
+        ...this.currentFile,
+        stateTransitions: { ...this.currentFile.stateTransitions, ...transitions },
+      };
 
-    await this.notifySubscribers(this.currentFile);
+      await this.notifySubscribers(this.currentFile);
+    });
   }
 
   private async notifySubscribers(project: LoadedProjectState) {
@@ -209,5 +329,18 @@ pomodoro_settings:
     for (const listener of Array.from(this.changeListeners)) {
       await Promise.resolve(listener(project));
     }
+  }
+
+  /**
+   * Atomic write (write-to-temp + rename) to avoid partial reads and reduce watcher storms.
+   */
+  private async writeTextFileAtomic(targetPath: string, contents: string): Promise<void> {
+    const dir = await path.dirname(targetPath);
+    const base = await path.basename(targetPath);
+    const tmpName = `.${base}.tmp.${Date.now()}.${Math.random().toString(16).slice(2)}`;
+    const tmpPath = await path.join(dir, tmpName);
+
+    await writeTextFile(tmpPath, contents);
+    await rename(tmpPath, targetPath);
   }
 }
