@@ -1,5 +1,14 @@
 # Repository Guidelines
 
+## Project Stage & Backwards Compatibility
+- **This app is not currently in use by end users.** It is an internal/experimental codebase.
+- **Do not spend time on backwards compatibility** for persisted data (settings, state files, caches, etc.) unless a task explicitly asks for it.
+- It is OK to make breaking changes to on-disk formats (e.g. `ProjectStore.json`, session registries, TODO frontmatter). Prefer the simplest correct implementation.
+- If a change would break existing local data, prefer one of these approaches:
+  - require a clean slate (document which directory/file to delete/reset), or
+  - fail fast with a clear error message instructing how to reset.
+- Avoid adding migration layers, schema versioning, multi-format parsing, or “support old versions” code paths by default.
+
 ## Project Structure & Module Organization
 - `src/` holds the React UI and shared frontend logic.
 - `src-tauri/` is the Rust backend and Tauri configuration.
