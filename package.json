@@ -16,7 +16,9 @@
     "tauri:test": "tauri dev --config src-tauri/tauri.test.conf.json -- --features test-harness",
     "tauri:test:build": "tauri build --config src-tauri/tauri.test.conf.json --features test-harness",
     "typecheck": "tsc --noEmit",
-    "postinstall": "bun run script/postinstall-setup.mts"
+    "postinstall": "bun run script/postinstall-setup.mts",
+    "smoke:bundle": "bun run script/smoke-test-bundle.mts",
+    "smoke:bundle:build": "bun run script/smoke-test-bundle.mts --build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
