@@ -1,7 +1,15 @@
-import { IconCheckbox, IconPlayerPause, IconPlayerPlay, IconPlayerSkipForward, IconSquare } from "@tabler/icons-react";
+import {
+  IconCheckbox,
+  IconList,
+  IconPlayerPause,
+  IconPlayerPlay,
+  IconPlayerSkipForward,
+  IconSquare,
+} from "@tabler/icons-react";
 import { useState } from "react";
 import type { ProjectMarkdown } from "../lib/ProjectStateEditor";
 import { SessionClient } from "../lib/SessionClient";
+import { SessionsPanel } from "./SessionsPanel";
 import { Markdown } from "./markdown";
 
 interface TaskListProps {
@@ -12,6 +20,8 @@ interface TaskListProps {
 
 export function TaskList({ tasks, onCompleteTask, projectFullPath }: TaskListProps) {
   const sessionClient = new SessionClient();
+  const [showSessionsPanel, setShowSessionsPanel] = useState(false);
+
   // Group tasks under their most recent heading
   const sections: { heading?: ProjectMarkdown & { type: "heading" }; items: ProjectMarkdown[] }[] = [];
   let currentSection: (typeof sections)[0] = { items: [] };
@@ -32,39 +42,55 @@ export function TaskList({ tasks, onCompleteTask, projectFullPath }: TaskListPro
   }
 
   return (
-    <div className="space-y-6">
-      {sections.map((section, i) => {
-        const itemElements = section.items
-          .map((item, j) => {
-            if (item.type === "task") {
-              return (
-                <TaskRow
-                  key={j}
-                  task={item}
-                  onCompleteTask={onCompleteTask}
-                  sessionClient={sessionClient}
-                  projectFullPath={projectFullPath}
-                />
-              );
-            }
-            return null;
-          })
-          .filter(Boolean);
-        if (!section.heading && itemElements.length === 0) return null;
-        return (
-          <div key={i} className="space-y-2">
-            {section.heading && (
-              <h2
-                className={`font-medium ${section.heading.level === 1 ? "text-xl" : "text-lg"} pb-2 border-b border-gray-200 mt-0`}
-              >
-                <Markdown inline>{section.heading.text}</Markdown>
-              </h2>
-            )}
-            <div className="space-y-2 pl-1">{itemElements}</div>
-          </div>
-        );
-      })}
-    </div>
+    <>
+      {showSessionsPanel && <SessionsPanel onClose={() => setShowSessionsPanel(false)} />}
+
+      <div className="space-y-6">
+        {/* Sessions button */}
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => setShowSessionsPanel(true)}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 bg-white border border-gray-300 rounded hover:bg-gray-50 transition-colors"
+          >
+            <IconList size={16} />
+            Sessions
+          </button>
+        </div>
+
+        {sections.map((section, i) => {
+          const itemElements = section.items
+            .map((item, j) => {
+              if (item.type === "task") {
+                return (
+                  <TaskRow
+                    key={j}
+                    task={item}
+                    onCompleteTask={onCompleteTask}
+                    sessionClient={sessionClient}
+                    projectFullPath={projectFullPath}
+                  />
+                );
+              }
+              return null;
+            })
+            .filter(Boolean);
+          if (!section.heading && itemElements.length === 0) return null;
+          return (
+            <div key={i} className="space-y-2">
+              {section.heading && (
+                <h2
+                  className={`font-medium ${section.heading.level === 1 ? "text-xl" : "text-lg"} pb-2 border-b border-gray-200 mt-0`}
+                >
+                  <Markdown inline>{section.heading.text}</Markdown>
+                </h2>
+              )}
+              <div className="space-y-2 pl-1">{itemElements}</div>
+            </div>
+          );
+        })}
+      </div>
+    </>
   );
 }
 
