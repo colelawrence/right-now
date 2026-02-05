@@ -206,7 +206,13 @@ function AppReady({ controllers, startupWarning }: { controllers: AppControllers
 
   // If no project is loaded, show the choose project UI
   if (!loaded || !project) {
-    return <AppNoProject onOpenProject={() => projectManager.openProject()} startupWarning={startupWarning} />;
+    return (
+      <AppNoProject
+        onOpenProject={() => projectManager.openProject()}
+        onOpenFolder={() => projectManager.openProjectFolder()}
+        startupWarning={startupWarning}
+      />
+    );
   }
 
   const endTime =
@@ -223,6 +229,7 @@ function AppReady({ controllers, startupWarning }: { controllers: AppControllers
     onStateChange: handleStateChange,
     onTimeAdjust: handleTimeAdjust,
     onOpenProject: () => projectManager.openProject(),
+    onOpenFolder: () => projectManager.openProjectFolder(),
     onCompleteTask: async (task: ProjectMarkdown & { type: "task" }) => {
       await projectManager.updateProject((draft) => handleCompleteTask(task, draft));
     },
@@ -244,6 +251,7 @@ interface AppViewProps {
   onStateChange: (newState: WorkState) => void;
   onTimeAdjust: (ms: number) => void;
   onOpenProject: () => void;
+  onOpenFolder: () => void;
   onCompleteTask: (task: ProjectMarkdown & { type: "task" }) => void;
   toggleCompact: () => void;
 }
@@ -396,6 +404,7 @@ function AppPlanner({
   onTimeAdjust,
   onCompleteTask,
   onOpenProject,
+  onOpenFolder,
   toggleCompact,
 }: AppViewProps) {
   const sessionsDebugEnabled = import.meta.env.DEV;
@@ -441,13 +450,24 @@ function AppPlanner({
           <button
             onClick={onOpenProject}
             className="text-xs px-3 py-1.5 text-gray-600 hover:bg-gray-100 transition-colors"
-            children="Open..."
+            title="Open TODO file"
+            children="Open File..."
+          />
+          <button
+            onClick={onOpenFolder}
+            className="text-xs px-3 py-1.5 text-gray-600 hover:bg-gray-100 transition-colors"
+            title="Open project folder"
+            children="Open Folder..."
           />
         </div>
       </header>
 
       <div className="flex-1 overflow-auto p-6 pb-16">
-        <TaskList tasks={project.projectFile.markdown} onCompleteTask={onCompleteTask} />
+        <TaskList
+          tasks={project.projectFile.markdown}
+          onCompleteTask={onCompleteTask}
+          projectFullPath={loaded?.fullPath}
+        />
         {sessionsDebugEnabled && showSessionsDebug && <SessionsDebugPanel />}
       </div>
       <footer className="absolute bottom-0 right-4">
@@ -471,12 +491,13 @@ function AppPlanner({
 
 function AppNoProject({
   onOpenProject,
+  onOpenFolder,
   startupWarning,
-}: { onOpenProject: () => void; startupWarning?: StartupWarning }) {
+}: { onOpenProject: () => void; onOpenFolder: () => void; startupWarning?: StartupWarning }) {
   return (
     <main className="h-screen flex flex-col items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
       <h1 className="text-xl font-semibold text-gray-800 mb-3">Welcome to Right Now</h1>
-      <p className="text-sm text-gray-600 mb-6">Choose a project file to begin</p>
+      <p className="text-sm text-gray-600 mb-6">Choose a project file or folder to begin</p>
 
       {startupWarning && (
         <div className="mb-6 max-w-md px-4 py-3 bg-yellow-50 border border-yellow-200 rounded">
@@ -487,12 +508,20 @@ function AppNoProject({
         </div>
       )}
 
-      <button
-        onClick={onOpenProject}
-        className="px-5 py-2.5 bg-blue-600 text-white text-sm hover:bg-blue-700 transition-all hover:shadow-md active:scale-95"
-      >
-        Open Project
-      </button>
+      <div className="flex gap-3">
+        <button
+          onClick={onOpenProject}
+          className="px-5 py-2.5 bg-blue-600 text-white text-sm hover:bg-blue-700 transition-all hover:shadow-md active:scale-95"
+        >
+          Open File...
+        </button>
+        <button
+          onClick={onOpenFolder}
+          className="px-5 py-2.5 bg-gray-600 text-white text-sm hover:bg-gray-700 transition-all hover:shadow-md active:scale-95"
+        >
+          Open Folder...
+        </button>
+      </div>
     </main>
   );
 }

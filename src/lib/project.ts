@@ -61,11 +61,31 @@ export class ProjectManager {
   }
 
   async openProject(defaultProject?: string) {
+    // Try file picker first (more direct for TODO.md selection)
     const selected = await open({
       multiple: false,
-      title: "Select folder or TODO file",
+      title: "Select TODO file",
       defaultPath: defaultProject,
-      directory: true, // Allow folder selection
+      directory: false,
+      filters: [
+        {
+          name: "Markdown",
+          extensions: ["md"],
+        },
+      ],
+    });
+
+    if (selected && !Array.isArray(selected)) {
+      await this.handleFolderOrFile(selected).catch(withError(`Failed to handle selection (${selected})`));
+    }
+  }
+
+  async openProjectFolder(defaultProject?: string) {
+    const selected = await open({
+      multiple: false,
+      title: "Select project folder",
+      defaultPath: defaultProject,
+      directory: true,
     });
 
     if (selected && !Array.isArray(selected)) {
