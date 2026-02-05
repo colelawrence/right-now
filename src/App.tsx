@@ -260,6 +260,7 @@ function AppReady({ controllers, startupWarning }: { controllers: AppControllers
     },
     toggleCompact: () => setIsCompact(!isCompact),
     onShowWalkthrough: handleShowWalkthrough,
+    projectManager,
   };
 
   return (
@@ -282,6 +283,7 @@ interface AppViewProps {
   onCompleteTask: (task: ProjectMarkdown & { type: "task" }) => void;
   toggleCompact: () => void;
   onShowWalkthrough: () => void;
+  projectManager: ProjectManager;
 }
 
 function useCurrentTask(project: LoadedProjectState) {
@@ -435,6 +437,7 @@ function AppPlanner({
   onOpenFolder,
   toggleCompact,
   onShowWalkthrough,
+  projectManager,
 }: AppViewProps) {
   const sessionsDebugEnabled = import.meta.env.DEV;
   const [showSessionsDebug, setShowSessionsDebug] = useState(false);
@@ -501,6 +504,9 @@ function AppPlanner({
         <TaskList
           tasks={project.projectFile.markdown}
           onCompleteTask={onCompleteTask}
+          onMoveHeadingSection={async (headingIndex, direction) => {
+            await projectManager.moveHeadingSection(headingIndex, direction);
+          }}
           projectFullPath={loaded?.fullPath}
         />
         {sessionsDebugEnabled && showSessionsDebug && <SessionsDebugPanel />}

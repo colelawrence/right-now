@@ -390,6 +390,57 @@ pomodoro_settings:
     });
   }
 
+  /**
+   * Move a heading section (heading + all content until next heading) up or down.
+   * Uses ProjectStateEditor.moveHeadingSection() under the hood.
+   */
+  async moveHeadingSection(headingIndex: number, direction: "up" | "down"): Promise<void> {
+    return await this.enqueueOp(async () => {
+      if (!this.currentFile) return;
+
+      const fullPath = this.currentFile.fullPath;
+      const token = this.loadToken;
+
+      // Read fresh content to avoid clobbering edits
+      const freshContent = await readTextFile(fullPath).catch(
+        withError((err) => `Error reading file (${fullPath}): ${JSON.stringify(err)}`, ProjectError),
+      );
+
+      if (token !== this.loadToken) return;
+
+      // Attempt the move
+      const updatedContent = ProjectStateEditor.moveHeadingSection(freshContent, headingIndex, direction);
+
+      // If null, the move was invalid (e.g., already at boundary)
+      if (!updatedContent) return;
+
+      // No change means no-op
+      if (updatedContent === freshContent) return;
+
+      await this.writeTextFileAtomic(fullPath, updatedContent);
+
+      // Update in-memory state
+      if (token !== this.loadToken) return;
+      if (!this.currentFile || this.currentFile.fullPath !== fullPath) return;
+
+      let projectFile: ProjectFile;
+      try {
+        projectFile = ProjectStateEditor.parse(updatedContent);
+      } catch (error) {
+        console.error("Failed to parse project file after section move", { fullPath, error });
+        return;
+      }
+
+      this.currentFile = {
+        ...this.currentFile,
+        textContent: updatedContent,
+        projectFile,
+      };
+
+      await this.notifySubscribers(this.currentFile);
+    });
+  }
+
   private async notifySubscribers(project: LoadedProjectState) {
     // Notify subscribers in sequence to avoid race conditions
     for (const listener of Array.from(this.changeListeners)) {

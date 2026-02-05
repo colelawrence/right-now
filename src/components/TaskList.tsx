@@ -1,5 +1,7 @@
 import {
   IconCheckbox,
+  IconChevronDown,
+  IconChevronUp,
   IconList,
   IconPlayerPause,
   IconPlayerPlay,
@@ -15,31 +17,40 @@ import { Markdown } from "./markdown";
 interface TaskListProps {
   tasks: ProjectMarkdown[];
   onCompleteTask: (task: ProjectMarkdown & { type: "task" }) => void;
+  onMoveHeadingSection?: (headingIndex: number, direction: "up" | "down") => void;
   projectFullPath?: string;
 }
 
-export function TaskList({ tasks, onCompleteTask, projectFullPath }: TaskListProps) {
+export function TaskList({ tasks, onCompleteTask, onMoveHeadingSection, projectFullPath }: TaskListProps) {
   const sessionClient = new SessionClient();
   const [showSessionsPanel, setShowSessionsPanel] = useState(false);
 
-  // Group tasks under their most recent heading
-  const sections: { heading?: ProjectMarkdown & { type: "heading" }; items: ProjectMarkdown[] }[] = [];
+  // Group tasks under their most recent heading, tracking the original headingIndex
+  const sections: {
+    heading?: ProjectMarkdown & { type: "heading" };
+    headingIndex?: number;
+    items: ProjectMarkdown[];
+  }[] = [];
   let currentSection: (typeof sections)[0] = { items: [] };
 
-  for (const item of tasks) {
+  for (let i = 0; i < tasks.length; i++) {
+    const item = tasks[i];
     if (item.type === "heading") {
-      if (currentSection.items.length > 0) {
+      if (currentSection.items.length > 0 || currentSection.heading) {
         sections.push(currentSection);
       }
-      currentSection = { heading: item, items: [] };
+      currentSection = { heading: item, headingIndex: i, items: [] };
     } else {
       currentSection.items.push(item);
     }
   }
   // Add the last section
-  if (currentSection.items.length > 0) {
+  if (currentSection.items.length > 0 || currentSection.heading) {
     sections.push(currentSection);
   }
+
+  // Filter out sections with only headings (keep them for UI consistency)
+  const headingSections = sections.filter((s) => s.heading !== undefined);
 
   return (
     <>
@@ -76,14 +87,42 @@ export function TaskList({ tasks, onCompleteTask, projectFullPath }: TaskListPro
             })
             .filter(Boolean);
           if (!section.heading && itemElements.length === 0) return null;
+
+          // Determine if this section can move up or down
+          const sectionPosition = section.heading ? headingSections.indexOf(section) : -1;
+          const canMoveUp = sectionPosition > 0;
+          const canMoveDown = sectionPosition >= 0 && sectionPosition < headingSections.length - 1;
+
           return (
             <div key={i} className="space-y-2">
               {section.heading && (
-                <h2
-                  className={`font-medium ${section.heading.level === 1 ? "text-xl" : "text-lg"} pb-2 border-b border-gray-200 mt-0`}
-                >
-                  <Markdown inline>{section.heading.text}</Markdown>
-                </h2>
+                <div className="flex items-center gap-2 group">
+                  <h2
+                    className={`font-medium ${section.heading.level === 1 ? "text-xl" : "text-lg"} pb-2 border-b border-gray-200 mt-0 flex-1`}
+                  >
+                    <Markdown inline>{section.heading.text}</Markdown>
+                  </h2>
+                  {onMoveHeadingSection && section.headingIndex !== undefined && (
+                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity pb-2">
+                      <button
+                        onClick={() => onMoveHeadingSection(section.headingIndex!, "up")}
+                        disabled={!canMoveUp}
+                        className="p-1 rounded hover:bg-gray-100 text-gray-600 disabled:opacity-30 disabled:cursor-not-allowed"
+                        title="Move section up"
+                      >
+                        <IconChevronUp size={16} />
+                      </button>
+                      <button
+                        onClick={() => onMoveHeadingSection(section.headingIndex!, "down")}
+                        disabled={!canMoveDown}
+                        className="p-1 rounded hover:bg-gray-100 text-gray-600 disabled:opacity-30 disabled:cursor-not-allowed"
+                        title="Move section down"
+                      >
+                        <IconChevronDown size={16} />
+                      </button>
+                    </div>
+                  )}
+                </div>
               )}
               <div className="space-y-2 pl-1">{itemElements}</div>
             </div>
