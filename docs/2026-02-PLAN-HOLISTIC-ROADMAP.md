@@ -1,13 +1,13 @@
-# Right Now — Holistic Roadmap (Local‑first → Connected)
+# Right Now — Holistic Roadmap (Local‑first + Terminal Sessions)
 
-**Version:** 0.1 (2026-02-05)
+**Version:** 0.2 (2026-02-05)
 
 **Intent:** Identify the biggest gaps between the current codebase and a cohesive, user-complete product, then propose an execution plan that connects the dots across:
 
-- Core local-first UX (Planner/Tracker/Tray)
+- Local-first UX (Welcome / Planner / Tracker / Tray)
 - Markdown file fidelity + multi-writer safety
-- Terminal session daemon + UI surfaces
-- **Connected mode**: logins + “connect to each other” (presence/rooms) without compromising local-first fundamentals
+- Terminal session daemon + UI surfaces (start/continue/attention)
+- Packaging hardening (ship the right sidecars; stable release builds)
 
 **Audience:** contributors/agents working in this repo.
 
@@ -16,9 +16,9 @@
 1. Read **Part 0** (Executive Blueprint) first. It defines the contract, non-goals, and the “shape” of the product.
 2. Skim **Part I** (Gap Analysis) to see what’s missing.
 3. Implement by **Phases** (Part IV), using the **Quality Gates** as stop-ship criteria.
-4. Convert the **Master TODO Inventory** (Part X) into whatever task tracker we’re using (beads/br, GitHub issues, TODO.md) — the tasks are written to be small and verifiable.
+4. Convert the **Master TODO Inventory** (Part X) into whatever tracker we’re using.
 
-> Note on backward compatibility: This repo is internal/experimental; we do **not** need to preserve backwards compatibility for settings/state files or on-disk formats unless a task explicitly asks for it.
+> Note on backward compatibility: this repo is internal/experimental; we do **not** need to preserve backwards compatibility for settings/state files or on-disk formats unless a task explicitly asks for it.
 
 ---
 
@@ -28,23 +28,23 @@
 
 Right Now is evolving into a **local-first focus system**:
 
-- A Markdown-backed task file (`TODO.md`) is the source of truth.
+- A Markdown task file (`TODO.md`) is the source of truth.
 - The UI provides two modes:
-  - **Planner**: review and edit your tasks
+  - **Planner**: a readable, glanceable lens on the TODO file
   - **Tracker**: a minimal always-available “what I’m doing right now” bar
 - A Pomodoro-like state machine (planning → working → break) is reinforced through audio cues.
 - A local daemon (`right-now-daemon`) can run **PTY terminal sessions bound to tasks**, update the TODO file with session badges, and notify you when output “needs attention”.
 
-The “next step” product gap is **coherence**: stitch these parts into complete user flows (onboarding → plan → execute → resume → share), with reliable surfaces for session control, time tracking, and—optionally—**connected mode** (login + presence + simple connection to other people).
+The next step product gap is **coherence**: stitch these parts into complete user flows (open → plan → execute → resume), with reliable session controls and better persisted timer state.
 
 ### 0.1.1 Non-negotiables (engineering/product contract)
 
 1. **The file is authoritative.** If we write, we must **read fresh from disk first** and write **atomically**.
 2. **No silent clobbers.** If the file is invalid/mid-edit, do not “fix” it by overwriting; surface an error and retry on next change.
-3. **Local-first works without an account.** Connected mode is additive and opt-in.
+3. **Planner is intentionally not a full editor.** The app should not become a markdown IDE. Most editing happens in the user’s preferred editor.
+   - We *do* allow a small set of “Now” actions: complete task, state transitions, session control.
 4. **We can break persisted formats.** Avoid migrations unless explicitly requested.
-5. **One active project at a time** in the UI (unless/until multi-project is a deliberate project).
-6. **Connected mode must be privacy-forward.** Default: share minimal status; task text sharing is opt-in.
+5. **One active project at a time** in the UI (unless/until multi-project becomes deliberate).
 
 ### 0.2 Mission and non-goals
 
@@ -56,32 +56,27 @@ The “next step” product gap is **coherence**: stitch these parts into comple
 
 **Non-goals (for the next major iteration)**
 
-- Building a full PM tool (no Jira/Linear clone).
-- Real-time collaborative editing of the same TODO.md (CRDT/OT) as a v0.x goal.
+- Building a full task editor (create/delete/inline markdown authoring) inside the app.
+- Real-time collaboration / login / shared presence rooms.
 - Perfect backward compatibility for frontmatter/settings formats.
-- Multi-platform parity (Windows/Linux) beyond “doesn’t crash” until explicitly prioritized.
+- Multi-platform parity beyond what we explicitly prioritize.
 
 ### 0.3 Product surfaces (what needs to exist)
 
-Local-first surfaces:
+Core local-first surfaces:
 
 - **Welcome / Project picker** (recent projects, create/open, error recovery)
-- **Planner** (task list + edit/add/reorder)
-- **Tracker** (minimal control, current task, timer, session status)
+- **System walkthrough** (make the model explicit: “edit in your editor; app reacts”)
+- **Planner** (readable list + minimal actions)
+- **Tracker** (minimal control; current task; timer; session status)
 - **Tray menu** (glanceable current task + quick actions)
-- **Settings** (sound packs, editor, CLI install, optional connected mode)
+- **Settings** (sound packs, editor integration, CLI status)
 
 Terminal session surfaces:
 
 - **Session controls inline with tasks** (Start/Continue/Stop)
-- **Session list** (global view; see running/waiting/stopped)
-- **Attention UI** (badge/indicator + deep link routing)
-
-Connected mode surfaces (MVP):
-
-- **Account / Login** (sign in/out)
-- **Connect** (create/join a room; invite others)
-- **Presence** (see who’s working/break/planning; optional “current task” share)
+- **Session list** (global view; see running/waiting/stopped + attention)
+- **Deep link routing** (`todos://session/<id>` focuses the app and lands in the right place)
 
 ### 0.4 Layered architecture (keep the core small)
 
@@ -96,13 +91,11 @@ Connected mode surfaces (MVP):
 - Windows (planner/tracker sizing/styling)
 - Tray integration
 - Sound playback
-- “Session client” that talks to the daemon
+- Session client that talks to the daemon
 
-**Ring 3: Optional connected mode**
+**Ring 3: Optional extras (deferred)**
 
-- Auth + token storage
-- Presence/rooms client (WebSocket)
-- Connection UI
+- Cloud sync / connected mode (explicitly out of scope right now)
 
 ### 0.5 Invariants to keep testable
 
@@ -115,46 +108,46 @@ Connected mode surfaces (MVP):
 
 These are churn magnets; decide explicitly before large implementation:
 
-1. **Connected mode scope**: presence-only MVP vs shared projects vs shared sessions.
-2. **Auth provider**: Supabase/Clerk/Firebase vs custom backend.
-3. **Token storage**: OS keychain vs encrypted store vs plaintext (prototype only).
-4. **Project identity**: how we identify “the same project” across users (frontmatter UUID, git remote, manual room).
-5. **Privacy defaults**: what is shared by default (state only) vs opt-in (task text, headings).
+1. **Task identity contract**: name-only matching vs adding stable IDs (and how visible that is in the markdown).
+2. **Reorder semantics**: if we reorder, do we reorder whole sections/headings only, never individual tasks?
+3. **Session “attach UX”**: open external terminal vs embed a terminal view in-app (v0.x should start with external).
+4. **Durable timer state schema**: what we persist in frontmatter (state + startedAt + endsAt) vs what remains ephemeral.
 
 ### 0.7 Quality gates (stop-ship)
 
 Local-first gates:
 
-- **No clobber** regression tests: external edits + daemon badge updates + UI edits can interleave without losing data.
-- **Project switch safety**: watchers and reloads cannot revive old projects.
-- **Crash safety**: atomic writes; no partial file writes.
+- **No clobber regression tests:** external edits + daemon badge updates + UI actions can interleave without losing data.
+- **Project switch safety:** watchers/reloads cannot revive old projects.
+- **Crash safety:** atomic writes; no partial file writes.
 
-Connected mode gates:
+Sessions gates:
 
-- **No network without opt-in.**
-- **Logout deletes tokens.**
-- **Presence updates are rate-limited** and do not leak task names unless the user opts in.
+- UI can control sessions without relying on “edit the markdown badge directly”.
+- Deep links reliably focus the app and land on the correct session.
+- Daemon-not-running errors produce actionable UX (not silent failures).
 
 ### 0.8 Definition of Done (two milestones)
 
 **DoD: Local v0.2 (cohesive solo flow)**
 
 - Welcome screen shows recent projects; can open/create without a file dialog every time.
-- Tasks can be added/edited/reordered from the UI while preserving markdown structure.
-- Work/break timing survives app restart (persisted state transitions).
-- Session badges are visible; Start/Continue/Stop flows are usable from the UI.
+- The app clearly explains its model (walkthrough/help): “edit in your editor; Right Now reacts”.
+- Work/break state can persist across restarts (durable timestamps).
+- Sessions are visible (badges rendered) even if control is minimal.
 
-**DoD: Connected MVP v0.3 (login + connect + presence)**
+**DoD: Sessions v0.3 (daemon feels like a feature)**
 
-- Users can sign in/out.
-- Users can create/join a room and see other participants.
-- Presence shows planning/working/break + time remaining; optional sharing of current task text.
+- Task list shows session status and Start/Continue/Stop CTAs.
+- Session list surface exists.
+- `todos://session/<id>` deep links route to a meaningful action.
+- Packaging is stable: release builds ship only intended binaries.
 
 ---
 
 ## PART I — Gap analysis (current app vs cohesive product)
 
-### 1.1 What works today (high-confidence)
+### 1.1 What works today (high confidence)
 
 - Markdown-backed tasks with headings and details.
 - Completion toggling persists to disk.
@@ -164,49 +157,31 @@ Connected mode gates:
 - Local daemon + CLI session system exists (PTY, detach/attach, attention detection, badge updates).
 - File watcher infrastructure exists (directory watch, coalesced reload, serialized ops).
 
-### 1.2 Gaps (local-first UX)
+### 1.2 Gaps (onboarding / “how it works”)
 
-**Welcome / onboarding**
+- Welcome screen is minimal and doesn’t teach the mental model.
+- Startup still drives a file dialog flow.
+- Users aren’t explicitly told that the Planner is a **lens** and that editing should happen in their editor.
 
-- No recent-project list UI (only a basic “Open Project” button).
-- Startup always prompts via file dialog (`openProject(lastProject)` still opens a dialog).
-- “Open TODO file” vs “Open folder” mismatch: current dialog is folder-only.
+### 1.3 Gaps (local-first timer/state)
 
-**Planner**
+- WorkState/stateTransitions are mostly ephemeral today; restart loses timer state.
+- Time tracking is specified in docs but not implemented.
 
-- No create/edit/delete/reorder tasks.
-- No inline editing of headings.
-- No clear “current task” selection (it’s implicitly first incomplete).
-
-**Tracker**
-
-- No session controls in tracker mode.
-- No “edit current task” flow.
-
-**Settings**
-
-- Sound packs exist but have little user-facing management.
-- No editor selection / CLI install UI (some pieces exist in Rust menu).
-
-**State persistence**
-
-- WorkState/stateTransitions are ephemeral only; restart loses timer state.
-- Time tracking (10s increments → frontmatter/task annotation) is planned but not implemented.
-
-### 1.3 Gaps (terminal sessions as a first-class feature)
+### 1.4 Gaps (sessions as a first-class feature)
 
 - UI has no session list, no session controls, no attach UX.
-- `todos://session/<id>` deep links are handled, but there’s no consumer that “routes” to a session surface.
-- Error states (daemon not running, socket unavailable, duplicate sessions) are not surfaced in UI.
-- Packaging needs to ensure the daemon/CLI are consistently available in release builds.
+- Deep links are received/parsed but do not route to a session surface.
+- Errors (daemon not running, socket unavailable, duplicates) are not surfaced in UI.
 
-### 1.4 Gaps (connected mode)
+### 1.5 Gaps (packaging / release ergonomics)
 
-- No auth or user identity.
-- No server/backend or protocol.
-- No privacy model.
-- No UI surfaces for login/connect/rooms.
-- No secure credential storage.
+- Release bundling can be fragile (accidental test-harness coupling, sidecar discovery issues).
+- Need a repeatable smoke checklist/script for release artifacts.
+
+### 1.6 Explicitly out of scope (for now)
+
+- Connected mode / login / “connect to each other”.
 
 ---
 
@@ -216,340 +191,277 @@ Connected mode gates:
 
 1. Launch app → **Welcome**
 2. Select a recent project or “Open…”
-3. **Planner**: add/edit/reorder tasks; optionally choose the current task
-4. Press “Start” → app switches to **Tracker**
+3. Welcome/Help explains:
+   - “Your TODO.md is the source of truth”
+   - “Edit tasks in your editor; Right Now will update live”
+   - “Use Right Now for focus + sessions + lightweight actions”
+4. **Planner** shows tasks; user hits Start → app switches to **Tracker**
 5. During work:
    - timer counts down
    - tray shows current task
    - warnings/sounds fire
-6. Complete task from tracker or planner → next task becomes current
-7. Break/resume/end session
-8. Quit app → reopen later and **resume state** (timer continues from persisted timestamps)
+6. User completes the current task (in app) or edits the file in their editor (outside) → app reacts
+7. Quit app → reopen later and **resume state**
 
 ### 2.2 Terminal session flow (solo)
 
-1. In Planner, current task has a “Start session” CTA
-2. Starting creates a daemon session and updates TODO.md badge
-3. UI shows session status (Running/Waiting/Stopped)
-4. “Continue” attaches (either:
-   - open in external terminal, or
-   - embedded terminal view in-app later)
-5. Attention triggers → UI shows an indicator; clicking focuses the relevant session.
-
-### 2.3 Connected flow (MVP: presence rooms)
-
-1. User opens Settings → “Connected mode” → **Sign in**
-2. User creates a **Room** (or joins via invite link/code)
-3. Room shows participants + their statuses:
-   - planning/working/break
-   - time remaining
-   - optional: current task text (if enabled)
-4. User can “Start together” (optional): room proposes a synchronized start time.
-
-**Privacy defaults**
-
-- Default share: only (planning/working/break) + coarse timer state.
-- Opt-in share: current task name / heading.
+1. In Planner, tasks show session status (if any).
+2. User clicks Start Session (or uses CLI) → daemon updates TODO.md badge.
+3. UI shows Running/Waiting/Stopped and any attention indicators.
+4. User clicks Continue/Attach → opens external terminal attach flow (v0.x).
+5. Attention triggers → UI and/or tray indicates and deep link can jump to the session.
 
 ---
 
 ## PART III — Technical approach (connecting the dots)
 
-### 3.1 Local data model & persistence
+### 3.1 Durable state in frontmatter
 
-- Expand frontmatter to persist:
-  - `current_state` (planning/working/break)
-  - `state_transition.started_at` / `ends_at`
-  - optional: `project_id` (UUID)
+Persist enough to restore timer state after restart:
+
+- `current_state`: planning/working/break
+- `state_transition.started_at`: timestamp
+- `state_transition.ends_at`: timestamp (optional)
+
+Notes:
+
+- We can change schema freely (no migration work required).
 - Keep a strict separation:
   - **durable state** lives in the file
   - **ephemeral UI state** (window mode, last warning timestamps) lives in memory/store
 
-> We can change the frontmatter schema freely (internal repo; no migration required).
+### 3.2 Walkthrough / model education
 
-### 3.2 Session service (UI ↔ daemon)
+Add a minimal, non-annoying walkthrough that can be dismissed:
 
-Implement a thin client layer:
+- First launch: show a 3–5 step explanation.
+- Accessible later via a “Help / How it works” button.
 
-- `src/lib/sessions/client.ts` — talks to the daemon socket via Tauri commands (preferred) or by invoking bundled CLI (fallback).
-- Expose operations:
-  - `listSessions()`
-  - `startSession(taskKey)`
-  - `stopSession(sessionId)`
-  - `continueSession(sessionId, { attach?: boolean })`
-  - `attachSession(sessionId)`
-- Subscribe to daemon notifications and bridge them into the app’s EventBus.
+Content should explicitly call out:
 
-### 3.3 Connected mode architecture (recommended MVP)
+- Edit tasks in your editor (VS Code, Vim, etc.)
+- Right Now auto-reloads and is safe with external writers
+- Sessions: badges appear in the TODO and deep links can open sessions
 
-**Recommendation:** start with a presence-only backend using a managed auth provider.
+Persist “seen tour” in `ProjectStore` (breaking changes are acceptable).
 
-- Backend options (pick one):
-  - **Supabase**: auth + realtime channels (fastest path)
-  - **Clerk + custom WebSocket service**
-  - **Custom (Axum + Postgres + WS)** for full control
+### 3.3 Editor ergonomics (without becoming an editor)
 
-**Client design**
+Prioritize fast context switches:
 
-- `AuthService`:
-  - sign-in/out
-  - store tokens securely
-  - expose `currentUser`
-- `PresenceClient`:
-  - connect/join room
-  - publish presence updates
-  - receive presence updates
+- “Open TODO file” (already exists) but make it *prominent*.
+- Optionally add:
+  - reveal in Finder
+  - copy path
+  - (later) open at current task line (if we adopt stable task identity)
 
-**Token storage**
+### 3.4 Reorder semantics (optional, nuanced)
 
-- Add a Rust-side credential store using OS keychain (Keychain on macOS).
-- Never store access/refresh tokens in plaintext `ProjectStore.json`.
+If we implement reorder, prefer **section-level moves**:
 
-**Project identity**
+- Allow moving an entire heading section up/down, including its tasks and intervening unrecognized markdown.
+- Avoid per-task reordering unless we commit to stable task identity and a well-defined preservation rule.
 
-- Add `project_id: <uuid>` in frontmatter for projects that opt into connected mode.
-- Room IDs can be:
-  - “manual room” created by user, or
-  - derived from `project_id` for a shared project experience.
+### 3.5 Session service (UI ↔ daemon)
 
-### 3.4 Presence update strategy
+Implement a thin `SessionClient` layer:
 
-- Broadcast on:
-  - state changes (planning/working/break)
-  - task completion
-  - coarse timer updates (e.g., every 15s or 30s, not every tick)
-- Payload (privacy-safe default):
-  - user id, display name
-  - work state
-  - endsAt (or remaining seconds)
-  - optional: current task summary (only if enabled)
+- `listSessions()`
+- `startSession(taskKey)`
+- `stopSession(sessionId)`
+- `continueSession(sessionId, { attach?: boolean })`
+
+Bridge daemon events into the app’s EventBus and/or reactive atoms.
+
+### 3.6 Packaging hardening
+
+- Release builds must not require building the test harness.
+- Sidecar binaries must be bundled intentionally and discoverable.
+- Provide a scripted smoke check for the produced app bundle.
 
 ---
 
 ## PART IV — Execution phases (with exit criteria)
 
-### Phase 0 — Foundation stabilization (finish the “core tech” loop)
+### Phase 0 — Foundation stabilization
 
-**Outcome:** reliability for multi-writer and watcher flows; clear error surfaces.
-
-Exit criteria:
-
-- E2E test(s) cover: external file edit → watcher reload → no clobber; daemon badge update + UI write interleaving.
-- “Invalid markdown/frontmatter” shows a non-destructive error UI and recovers.
-
-### Phase 1 — Welcome screen + project switching
-
-**Outcome:** opening/creating projects is a first-class UX, not a file dialog.
+Outcome:
+- Multi-writer safety stays correct under bursty file events and session badge rewrites.
 
 Exit criteria:
+- E2E test(s) cover: external file edit → watcher reload → no clobber.
+- Invalid frontmatter shows a non-destructive error UI and recovers.
 
+### Phase 1 — Welcome + walkthrough
+
+Outcome:
+- Opening projects is fast and the mental model is explicit.
+
+Exit criteria:
 - Welcome screen shows recent projects.
-- “Open last project automatically” path exists (with fallback to chooser).
-- “Open folder” and “Open file” behaviors are correct.
+- Auto-load last active project if it exists.
+- Walkthrough/help exists and can be re-opened.
 
-### Phase 2 — Task CRUD + reorder + edit
+### Phase 2 — Persisted work/break state (and initial time tracking)
 
-**Outcome:** app can be used without external editor.
-
-Exit criteria:
-
-- Add/edit/delete tasks.
-- Reorder tasks within a section; preserve markdown structure.
-- Edit headings.
-
-### Phase 3 — Persisted state + time tracking
-
-**Outcome:** timer sessions survive restart; time tracking becomes real.
+Outcome:
+- Restarting the app does not lose timer progress.
 
 Exit criteria:
-
 - Work/break state and timestamps persist to file.
-- Time tracking stored (initially frontmatter-only is OK); updates are rate-limited.
+- Timer resumes correctly after restart.
 
-### Phase 4 — Sessions in UI (bridge the daemon)
+### Phase 3 — Sessions in UI (daemon becomes user-visible)
 
-**Outcome:** terminal session system is visible and usable from the UI.
+Outcome:
+- Sessions are controllable from UI surfaces.
 
 Exit criteria:
-
-- TaskList shows session badges and CTAs.
+- Task list shows session status + Start/Continue/Stop CTAs.
 - Session list surface exists.
-- Deep link `todos://session/<id>` routes to “continue/attach”.
+- Deep link `todos://session/<id>` routes to a meaningful action.
 
-### Phase 5 — Packaging + distribution hardening
+### Phase 4 — Packaging + distribution hardening
 
-**Outcome:** release builds are consistent (daemon/cli included, no accidental test harness).
-
-Exit criteria:
-
-- Release bundle includes required binaries and resources.
-- Deep links work in release.
-- Install/uninstall CLI shim is predictable.
-
-### Phase 6 — Connected mode MVP (login + rooms + presence)
-
-**Outcome:** users can login and connect to other users in a room.
+Outcome:
+- Builds are predictable and smoke-tested.
 
 Exit criteria:
-
-- Login works end-to-end.
-- Create/join room works.
-- Presence shows other users and updates on state changes.
-
-### Phase 7 — Collaboration expansions (post-MVP)
-
-Candidates:
-
-- “Start together” countdown and synchronization.
-- Light messaging (“nudge”, “on break”) inside rooms.
-- Optional: share session attention events (privacy gated).
+- `bun run tauri build` succeeds on a clean target without building rn-test-harness.
+- Release bundle does not contain rn-test-harness.
+- Smoke script validates the bundle contents and a basic session workflow.
 
 ---
 
 ## PART X — Master TODO inventory (task specs)
 
-> These are written in a “small bead” style: Context → Done means → Verification → RGR.
+> These tasks are written to be small and verifiable (Context → Done means → Verification → RGR).
 
-### A) Welcome + projects
+### A) Welcome + onboarding
 
-#### A1. Welcome screen lists recent projects and opens without a dialog
-
-Context:
-- Today the app always launches a file dialog. This blocks “quick start” and makes the app feel unfinished.
-
-Done means:
-- Welcome screen shows recent projects from `ProjectStore`.
-- Clicking a recent project loads it directly.
-- “Open…” still exists for browsing.
-
-Verification:
-- Manual: launch app, see recent list, click one, project loads.
-- Tests: add a unit/integration test around `ProjectStore.addRecentProject` + a mocked ProjectManager load.
-
-Red-Green-Refactor plan:
-- Red: add a test that expects recent list rendering when store has entries.
-- Green: implement minimal UI.
-- Refactor: extract `Welcome` component and keep App.tsx slim.
-
-#### A2. Support opening a TODO file (not just folders)
+#### A1. Welcome screen lists recent projects and opens directly
 
 Context:
-- The dialog is configured as folder-only.
+- Current Welcome only shows an Open button and the app always drives a file dialog. This blocks fast repeat usage.
 
 Done means:
-- “Open…” allows either folder or markdown file selection.
+- Welcome screen lists recent project paths from ProjectStore.
+- Clicking a recent project loads it without showing a dialog.
+- Still offer an “Open…” button to browse.
 
 Verification:
-- Manual: select a `TODO.md` file directly.
+- Manual: open two projects, relaunch, verify both show in recent list and open correctly.
+
+RGR:
+- Red: add a failing test (E2E or component test) expecting recents UI.
+- Green: implement minimal Welcome UI + load action.
+- Refactor: extract Welcome into its own component and keep App.tsx thin.
+
+#### A2. Walkthrough: explain the model (“edit in your editor; Right Now reacts”)
+
+Done means:
+- First-run walkthrough exists (dismissible).
+- It clearly explains: file-as-db, external editor workflow, sessions/deep links.
+- Walkthrough can be reopened from the UI.
+
+Verification:
+- Manual: fresh profile shows walkthrough once; later accessible via a button.
+
+#### A3. Startup: auto-load last active project without prompting
+
+Context:
+- main.tsx currently calls openProject(lastProject) which still opens a dialog.
+
+Done means:
+- On launch, if lastActiveProject exists and is readable, load it directly.
+- If it fails, fall back to Welcome with a clear error.
+
+Verification:
+- Manual: set lastActiveProject, relaunch, ensure it loads without dialog. Rename/delete file, relaunch, ensure fallback UI appears.
 
 ---
 
-### B) Task editing
+### B) Persisted timer state
 
-#### B1. Add-task UI (append + preserve formatting)
+#### B1. Persist work/break state + timestamps in frontmatter
 
 Context:
-- Without task creation, the app is not usable as a primary surface.
+- WorkState/stateTransitions are ephemeral; restart loses timer state.
 
 Done means:
-- Planner has an input to add a new task.
-- Task is inserted in markdown without breaking existing sections.
+- Frontmatter includes current state + transition timestamps.
+- On load, ProjectManager restores timer state from frontmatter.
 
 Verification:
-- Unit: ProjectStateEditor update preserves unrelated content.
-- E2E: add task → file contains `- [ ] New task`.
-
-#### B2. Edit task title + details
-
-Done means:
-- Clicking a task allows editing title and details.
-- Enter saves; Esc cancels.
-
-Verification:
-- Manual: edit in UI; reopen file in editor; formatting preserved.
-
-#### B3. Reorder tasks within a heading
-
-Done means:
-- Drag/drop or buttons reorder tasks.
-- Markdown structure (headings/unrecognized blocks) remains stable.
+- Manual: start work, quit, reopen, ensure timer resumes correctly.
 
 ---
 
-### C) Persisted state + time tracking
+### C) Sessions UI integration
 
-#### C1. Persist `workState` + transition timestamps in frontmatter
-
-Context:
-- Restart currently loses timer state.
+#### C1. Implement SessionClient (daemon RPC bridge)
 
 Done means:
-- Starting work/break updates frontmatter state.
-- On launch, ProjectManager restores state from file.
+- UI can list/start/stop/continue sessions via a SessionClient.
+- Errors are surfaced (at least to console + placeholder toast).
 
 Verification:
-- Manual: start work, quit app, reopen, state is restored.
-- Unit: parse/update frontmatter round-trip tests.
+- Manual: start/stop works from UI.
 
-#### C2. Rate-limited time accumulation (prototype)
+#### C2. Render session status + Start/Continue/Stop CTAs in TaskList
 
 Done means:
-- Track work time locally (e.g., every 10s) and flush to frontmatter every N seconds/minutes.
+- Task rows show Running/Waiting/Stopped.
+- Buttons call SessionClient (not direct markdown edits).
 
 Verification:
-- Unit: deterministic TestClock drives accumulation.
+- Manual: start session from UI; see badge/state update.
+
+#### C3. Deep links: route todos://session/<id> to Continue/Attach UX
+
+Done means:
+- On macOS: `open "todos://session/42"` focuses the app and routes to session 42.
+
+Verification:
+- Manual smoke test on macOS.
+
+#### C4. Add a session list surface (running/waiting/stopped)
+
+Done means:
+- UI surface lists sessions with status, task, project path.
+- Selecting a session offers Continue/Stop actions.
+
+Verification:
+- Manual: manage at least one running + one stopped session.
 
 ---
 
-### D) Session UI integration
+### D) Packaging hardening
 
-#### D1. Implement `SessionClient` and show session badges in TaskList
+#### D1. Exclude rn-test-harness from release builds
 
 Done means:
-- TaskList renders Running/Waiting/Stopped with CTAs.
-- Clicking Start/Continue/Stop calls the daemon.
+- Release builds do not depend on rn-test-harness.
+- Right Now.app/Contents/MacOS does not contain rn-test-harness.
 
 Verification:
-- Manual: Start session from UI; see badge change.
+- Delete target/release/rn-test-harness and run: `bun run tauri build`.
 
-#### D2. Deep link routing to session continue/attach
+#### D2. Bundle daemon + todo CLI intentionally
 
 Done means:
-- `open 'todos://session/<id>'` focuses app and routes to the session action.
+- Release bundle includes required sidecars and they are discoverable at runtime.
 
 Verification:
-- Manual smoke on macOS.
+- Install DMG and run a session start/continue/stop flow without dev tooling.
 
----
-
-### E) Connected mode MVP
-
-#### E1. Add Account screen + login/logout skeleton
-
-Context:
-- We need a first-class surface for identity.
+#### D3. Add scripted post-build smoke test
 
 Done means:
-- UI includes Account/Connected section.
-- Login starts an auth flow; logout clears tokens.
+- A script validates the built bundle contents and a minimal smoke flow.
 
 Verification:
-- Manual: sign in/out; see UI state update.
-
-#### E2. Presence rooms (create/join) + participant list
-
-Done means:
-- Create room → invite code/link.
-- Join room → see participants.
-
-Verification:
-- Manual: run two app instances (or two machines) and see each other.
-
-#### E3. Presence updates from local state
-
-Done means:
-- work/break changes publish presence.
-- participant list updates within a few seconds.
+- Script fails if a sidecar is missing.
 
 ---
 
@@ -557,5 +469,5 @@ Done means:
 
 - Terminal sessions plan: `docs/2025-12-PLAN-TODO-TERMINAL-SESSIONS.md`
 - Event-driven plan: `docs/PLAN-EVENT-DRIVEN-ARCHITECTURE.md`
-- Time tracking spec: `docs/time-tracking-feature.md`
+- Time tracking spec (future): `docs/time-tracking-feature.md`
 - Markdown storage spec: `docs/markdown-based-project-files.md`
