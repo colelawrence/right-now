@@ -1,6 +1,5 @@
-import { IconCheck, IconClipboard, IconEdit, IconTerminal } from "@tabler/icons-react";
+import { IconCheck, IconClipboard, IconEdit, IconFolder, IconTerminal } from "@tabler/icons-react";
 import { Window } from "@tauri-apps/api/window";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { useAtom } from "jotai";
 import { forwardRef, useEffect, useRef, useState } from "react";
 import { SessionsDebugPanel } from "./components/SessionsDebugPanel";
@@ -10,7 +9,17 @@ import { Timer } from "./components/Timer";
 import { Walkthrough } from "./components/Walkthrough";
 import { Welcome } from "./components/Welcome";
 import { Markdown, MarkdownProvider } from "./components/markdown";
-import { type AppWindows, type ISoundManager, type ProjectManager, type ProjectStore, useDeepLink } from "./lib";
+import {
+  type AppWindows,
+  type ISoundManager,
+  type ProjectManager,
+  type ProjectStore,
+  copyTodoFilePath,
+  formatDisplayPath,
+  openTodoFile,
+  revealTodoFile,
+  useDeepLink,
+} from "./lib";
 import type { ProjectMarkdown } from "./lib/ProjectStateEditor";
 import type { Clock } from "./lib/clock";
 import type { EventBus } from "./lib/events";
@@ -355,15 +364,31 @@ function AppCompact({
             <Markdown>{currentTask.details}</Markdown>
           </div>
         )}
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-1 shrink-0" data-no-drag>
           {loaded?.fullPath && (
-            <button
-              onClick={() => loaded.fullPath && openPath(loaded.fullPath)}
-              className="text-xs p-1.5 text-gray-600 hover:bg-gray-200 rounded"
-              title="Open project file in default application"
-            >
-              <IconEdit size={16} />
-            </button>
+            <>
+              <button
+                onClick={() => loaded.fullPath && openTodoFile(loaded.fullPath)}
+                className="text-xs p-1.5 text-blue-600 hover:bg-blue-100 rounded"
+                title="Open TODO.md in editor"
+              >
+                <IconEdit size={16} />
+              </button>
+              <button
+                onClick={() => loaded.fullPath && copyTodoFilePath(loaded.fullPath)}
+                className="text-xs p-1.5 text-gray-600 hover:bg-gray-200 rounded"
+                title="Copy file path"
+              >
+                <IconClipboard size={14} />
+              </button>
+              <button
+                onClick={() => loaded.fullPath && revealTodoFile(loaded.fullPath)}
+                className="text-xs p-1.5 text-gray-600 hover:bg-gray-200 rounded"
+                title="Reveal in Finder"
+              >
+                <IconFolder size={14} />
+              </button>
+            </>
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -470,15 +495,34 @@ function AppPlanner({
             />
           )}
         </div>
-        <div className="flex items-center">
-          {loaded && (
-            <button
-              onClick={() => loaded.fullPath && openPath(loaded.fullPath)}
-              className="text-xs px-3 py-1.5 text-gray-600 hover:bg-gray-100 transition-colors flex gap-1 items-center"
-              title="Open project file in default application"
-              children={[loaded.fullPath.split("/").slice(-2).join("/"), <IconEdit size={12} />]}
-            />
+        <div className="flex items-center gap-1">
+          {loaded?.fullPath && (
+            <>
+              <button
+                onClick={() => loaded.fullPath && openTodoFile(loaded.fullPath)}
+                className="text-xs px-3 py-1.5 bg-blue-600 text-white hover:bg-blue-700 transition-colors flex gap-1.5 items-center font-medium"
+                title="Open TODO.md in your editor"
+              >
+                <span>{formatDisplayPath(loaded.fullPath)}</span>
+                <IconEdit size={14} />
+              </button>
+              <button
+                onClick={() => loaded.fullPath && copyTodoFilePath(loaded.fullPath)}
+                className="text-xs p-1.5 text-gray-600 hover:bg-gray-100 transition-colors"
+                title="Copy file path"
+              >
+                <IconClipboard size={14} />
+              </button>
+              <button
+                onClick={() => loaded.fullPath && revealTodoFile(loaded.fullPath)}
+                className="text-xs p-1.5 text-gray-600 hover:bg-gray-100 transition-colors"
+                title="Reveal in Finder"
+              >
+                <IconFolder size={14} />
+              </button>
+            </>
           )}
+          <div className="w-px h-4 bg-gray-300 mx-1" />
           <button
             onClick={onShowWalkthrough}
             className="text-xs px-3 py-1.5 text-gray-600 hover:bg-gray-100 transition-colors"
