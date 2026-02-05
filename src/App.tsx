@@ -1,8 +1,9 @@
-import { IconCheck, IconClipboard, IconEdit } from "@tabler/icons-react";
+import { IconCheck, IconClipboard, IconEdit, IconTerminal } from "@tabler/icons-react";
 import { Window } from "@tauri-apps/api/window";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { useAtom } from "jotai";
 import { forwardRef, useEffect, useRef, useState } from "react";
+import { SessionsDebugPanel } from "./components/SessionsDebugPanel";
 import { StateControls } from "./components/StateControls";
 import { TaskList } from "./components/TaskList";
 import { Timer } from "./components/Timer";
@@ -28,12 +29,18 @@ interface AppControllers {
   eventBus: EventBus;
 }
 
+interface StartupWarning {
+  message: string;
+  details?: string;
+}
+
 interface AppProps {
   controllers?: AppControllers;
   startupError?: Error;
+  startupWarning?: StartupWarning;
 }
 
-function AppOuter({ controllers, startupError }: AppProps) {
+function AppOuter({ controllers, startupError, startupWarning }: AppProps) {
   // If we have a startup error, show error UI
   if (startupError) {
     return (
@@ -63,7 +70,7 @@ function AppOuter({ controllers, startupError }: AppProps) {
     );
   }
 
-  return <AppReady controllers={controllers} />;
+  return <AppReady controllers={controllers} startupWarning={startupWarning} />;
 }
 
 function useLoadedProject(projectManager: ProjectManager) {
@@ -81,7 +88,7 @@ function useLoadedProject(projectManager: ProjectManager) {
   return loaded;
 }
 
-function AppReady({ controllers }: { controllers: AppControllers }) {
+function AppReady({ controllers, startupWarning }: { controllers: AppControllers; startupWarning?: StartupWarning }) {
   const { projectManager, appWindows, projectStore, soundManager, clock, eventBus } = controllers;
   const loaded = useLoadedProject(projectManager);
   const project = loaded?.projectFile;
@@ -199,7 +206,7 @@ function AppReady({ controllers }: { controllers: AppControllers }) {
 
   // If no project is loaded, show the choose project UI
   if (!loaded || !project) {
-    return <AppNoProject onOpenProject={() => projectManager.openProject()} />;
+    return <AppNoProject onOpenProject={() => projectManager.openProject()} startupWarning={startupWarning} />;
   }
 
   const endTime =
@@ -391,6 +398,9 @@ function AppPlanner({
   onOpenProject,
   toggleCompact,
 }: AppViewProps) {
+  const sessionsDebugEnabled = import.meta.env.DEV;
+  const [showSessionsDebug, setShowSessionsDebug] = useState(false);
+
   return (
     <main className="h-screen flex flex-col bg-gradient-to-br from-white to-gray-50">
       <header
@@ -438,9 +448,20 @@ function AppPlanner({
 
       <div className="flex-1 overflow-auto p-6 pb-16">
         <TaskList tasks={project.projectFile.markdown} onCompleteTask={onCompleteTask} />
+        {sessionsDebugEnabled && showSessionsDebug && <SessionsDebugPanel />}
       </div>
       <footer className="absolute bottom-0 right-4">
-        <div className="flex justify-center p-2">
+        <div className="flex justify-center p-2 gap-2">
+          {sessionsDebugEnabled && (
+            <button
+              onClick={() => setShowSessionsDebug(!showSessionsDebug)}
+              className="px-3 py-1.5 bg-gray-700 text-white text-xs rounded hover:bg-gray-800 transition-colors flex items-center gap-1"
+              title="Toggle Sessions Debug Panel (Dev)"
+            >
+              <IconTerminal size={14} />
+              {showSessionsDebug ? "Hide" : "Show"} Sessions
+            </button>
+          )}
           <StateControls project={project} onStateChange={onStateChange} toggleCompact={toggleCompact} />
         </div>
       </footer>
@@ -448,11 +469,24 @@ function AppPlanner({
   );
 }
 
-function AppNoProject({ onOpenProject }: { onOpenProject: () => void }) {
+function AppNoProject({
+  onOpenProject,
+  startupWarning,
+}: { onOpenProject: () => void; startupWarning?: StartupWarning }) {
   return (
     <main className="h-screen flex flex-col items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
       <h1 className="text-xl font-semibold text-gray-800 mb-3">Welcome to Right Now</h1>
       <p className="text-sm text-gray-600 mb-6">Choose a project file to begin</p>
+
+      {startupWarning && (
+        <div className="mb-6 max-w-md px-4 py-3 bg-yellow-50 border border-yellow-200 rounded">
+          <p className="text-sm text-yellow-800 font-medium mb-1">{startupWarning.message}</p>
+          {startupWarning.details && (
+            <p className="text-xs text-yellow-700 font-mono break-all">{startupWarning.details}</p>
+          )}
+        </div>
+      )}
+
       <button
         onClick={onOpenProject}
         className="px-5 py-2.5 bg-blue-600 text-white text-sm hover:bg-blue-700 transition-all hover:shadow-md active:scale-95"

@@ -27,11 +27,17 @@ interface AppControllers {
   eventBus: EventBus;
 }
 
+interface StartupWarning {
+  message: string;
+  details?: string;
+}
+
 // Initialize app controllers
 async function initializeApp() {
   const jotaiStore = getDefaultStore();
   let controllers: AppControllers | undefined;
   let error: Error | undefined;
+  let warning: StartupWarning | undefined;
 
   try {
     console.info("Initializing app");
@@ -94,21 +100,35 @@ async function initializeApp() {
 
     controllers = { projectManager, appWindows, projectStore, soundManager, clock: realClock, eventBus };
 
-    // Try to load last active project
+    // Try to auto-load last active project without prompting
     const lastProject = await projectStore.getLastActiveProject();
-    console.info("Opening project", { lastProject });
-    await projectManager.openProject(lastProject);
+    if (lastProject) {
+      console.info("Auto-loading last project", { lastProject });
+      try {
+        await projectManager.loadProject(lastProject, "absolute");
+        console.info("Auto-load successful");
+      } catch (loadError) {
+        console.warn("Failed to auto-load project, falling back to Welcome screen", loadError);
+        const errorMsg = loadError instanceof Error ? loadError.message : String(loadError);
+        warning = {
+          message: `Could not load previous project: ${lastProject.split("/").pop()}`,
+          details: errorMsg,
+        };
+      }
+    } else {
+      console.info("No last active project, starting with Welcome screen");
+    }
   } catch (e) {
     console.error("Failed to initialize app:", e);
     error = e instanceof Error ? e : new Error(String(e));
   }
 
-  console.info("Rendering app", { controllers, error });
+  console.info("Rendering app", { controllers, error, warning });
   // Render React app with controllers or error
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
       <JotaiProvider store={getDefaultStore()}>
-        <AppReady controllers={controllers} startupError={error} />
+        <AppReady controllers={controllers} startupError={error} startupWarning={warning} />
       </JotaiProvider>
     </React.StrictMode>,
   );

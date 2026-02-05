@@ -196,6 +196,132 @@ fn toggle_mini_os_specific_styling(window: tauri::Window, mini: bool) {
 }
 
 // ============================================================================
+// Session/Daemon Commands (Unix only for now)
+// ============================================================================
+
+#[cfg(unix)]
+#[tauri::command]
+fn session_list(project_path: Option<String>) -> Result<Vec<session::protocol::Session>, String> {
+    use session::daemon_client::{response_to_result, send_request};
+    use session::protocol::{DaemonRequest, DaemonResponse};
+
+    let request = DaemonRequest::List { project_path };
+
+    let response = send_request(request).map_err(|e| e.to_string())?;
+
+    response_to_result(response, |r| {
+        if let DaemonResponse::SessionList { sessions } = r {
+            Some(sessions)
+        } else {
+            None
+        }
+    })
+}
+
+#[cfg(unix)]
+#[tauri::command]
+fn session_start(
+    task_key: String,
+    project_path: String,
+    shell: Option<Vec<String>>,
+) -> Result<session::protocol::Session, String> {
+    use session::daemon_client::{response_to_result, send_request};
+    use session::protocol::{DaemonRequest, DaemonResponse};
+
+    let request = DaemonRequest::Start {
+        task_key,
+        project_path,
+        shell,
+    };
+
+    let response = send_request(request).map_err(|e| e.to_string())?;
+
+    response_to_result(response, |r| {
+        if let DaemonResponse::SessionStarted { session } = r {
+            Some(session)
+        } else {
+            None
+        }
+    })
+}
+
+#[cfg(unix)]
+#[tauri::command]
+fn session_stop(session_id: u64) -> Result<session::protocol::Session, String> {
+    use session::daemon_client::{response_to_result, send_request};
+    use session::protocol::{DaemonRequest, DaemonResponse};
+
+    let request = DaemonRequest::Stop { session_id };
+
+    let response = send_request(request).map_err(|e| e.to_string())?;
+
+    response_to_result(response, |r| {
+        if let DaemonResponse::SessionStopped { session } = r {
+            Some(session)
+        } else {
+            None
+        }
+    })
+}
+
+#[cfg(unix)]
+#[tauri::command]
+fn session_continue(
+    session_id: u64,
+    tail_bytes: Option<usize>,
+) -> Result<serde_json::Value, String> {
+    use session::daemon_client::{response_to_result, send_request};
+    use session::protocol::{DaemonRequest, DaemonResponse};
+
+    let request = DaemonRequest::Continue {
+        session_id,
+        tail_bytes,
+    };
+
+    let response = send_request(request).map_err(|e| e.to_string())?;
+
+    response_to_result(response, |r| {
+        if let DaemonResponse::SessionContinued { session, tail } = r {
+            Some(serde_json::json!({
+                "session": session,
+                "tail": tail
+            }))
+        } else {
+            None
+        }
+    })
+}
+
+// Stub commands for non-Unix platforms
+#[cfg(not(unix))]
+#[tauri::command]
+fn session_list(_project_path: Option<String>) -> Result<Vec<()>, String> {
+    Err("Session management not yet supported on this platform".to_string())
+}
+
+#[cfg(not(unix))]
+#[tauri::command]
+fn session_start(
+    _task_key: String,
+    _project_path: String,
+    _shell: Option<Vec<String>>,
+) -> Result<(), String> {
+    Err("Session management not yet supported on this platform".to_string())
+}
+
+#[cfg(not(unix))]
+#[tauri::command]
+fn session_stop(_session_id: u64) -> Result<(), String> {
+    Err("Session management not yet supported on this platform".to_string())
+}
+
+#[cfg(not(unix))]
+#[tauri::command]
+fn session_continue(_session_id: u64, _tail_bytes: Option<usize>) -> Result<(), String> {
+    Err("Session management not yet supported on this platform".to_string())
+}
+
+// ============================================================================
 // CLI Shim Commands
 // ============================================================================
 
@@ -445,7 +571,11 @@ pub fn run() {
             get_cli_shim_info,
             set_cli_name,
             install_cli_shim,
-            uninstall_cli_shim
+            uninstall_cli_shim,
+            session_list,
+            session_start,
+            session_stop,
+            session_continue
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -532,6 +662,10 @@ pub fn create_test_harness_builder() -> tauri::Builder<tauri::Wry> {
             set_cli_name,
             install_cli_shim,
             uninstall_cli_shim,
+            session_list,
+            session_start,
+            session_stop,
+            session_continue,
             // Test harness commands
             test_harness::test_create_temp_dir,
             test_harness::test_load_fixture,

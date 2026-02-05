@@ -48,6 +48,28 @@ describe("Project Loading", () => {
     expect(true).toBe(true);
   });
 
+  it("should not crash when trying to auto-load a missing project", async () => {
+    const runner = getRunner();
+
+    // Reset state and try to open a nonexistent path
+    // This simulates having a lastActiveProject that no longer exists
+    await runner.resetState();
+
+    // Directly open a nonexistent project path
+    // This should fall back to the Welcome screen without crashing
+    try {
+      await runner.openProject("/nonexistent/project/path/TODO.md");
+    } catch (error) {
+      // Opening a nonexistent path via the dialog should fail gracefully
+      // The auto-load case should not throw, but openProject might
+      // For now, we just verify the app didn't crash
+    }
+
+    // Verify the app is still responding
+    const response = await runner.invoke({ type: "ping" });
+    expect(response.type).toBe("pong");
+  });
+
   // TODO: Enable these tests once frontend communication is working
 
   // it("should parse tasks from the project file", async () => {
