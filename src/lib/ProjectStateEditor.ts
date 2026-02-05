@@ -113,6 +113,92 @@ export interface ProjectFile {
 
 export namespace ProjectStateEditor {
   /**
+   * Move an entire heading section (heading + all content until next heading) up or down.
+   *
+   * @param content - The full markdown content (with frontmatter)
+   * @param headingIndex - The index of the heading in the blocks array (not line number)
+   * @param direction - "up" or "down"
+   * @returns Updated markdown content, or null if the move is invalid/no-op
+   */
+  export function moveHeadingSection(content: string, headingIndex: number, direction: "up" | "down"): string | null {
+    const state = parse(content);
+    const blocks = state.markdown;
+
+    // Find all heading indices
+    const headingIndices: number[] = [];
+    blocks.forEach((block, idx) => {
+      if (block.type === "heading") {
+        headingIndices.push(idx);
+      }
+    });
+
+    // Validate that headingIndex points to a heading
+    if (!headingIndices.includes(headingIndex)) {
+      return null;
+    }
+
+    // Find which heading number this is (0-based among headings)
+    const headingPosition = headingIndices.indexOf(headingIndex);
+
+    // Determine section boundaries
+    const sectionStart = headingIndex;
+    const nextHeadingIdx = headingIndices[headingPosition + 1];
+    const sectionEnd = nextHeadingIdx !== undefined ? nextHeadingIdx : blocks.length;
+
+    if (direction === "up") {
+      // Can't move the first section up
+      if (headingPosition === 0) {
+        return null;
+      }
+
+      // Find previous section boundaries
+      const prevSectionStart = headingIndices[headingPosition - 1];
+      const prevSectionEnd = sectionStart;
+
+      // Extract sections
+      const prevSection = blocks.slice(prevSectionStart, prevSectionEnd);
+      const currentSection = blocks.slice(sectionStart, sectionEnd);
+
+      // Rebuild blocks with swapped sections
+      const newBlocks = [
+        ...blocks.slice(0, prevSectionStart),
+        ...currentSection,
+        ...prevSection,
+        ...blocks.slice(sectionEnd),
+      ];
+
+      state.markdown = newBlocks;
+      return update(content, state);
+    } else {
+      // direction === "down"
+      // Can't move the last section down
+      if (headingPosition === headingIndices.length - 1) {
+        return null;
+      }
+
+      // Find next section boundaries
+      const nextSectionStart = nextHeadingIdx;
+      const nextNextHeadingIdx = headingIndices[headingPosition + 2];
+      const nextSectionEnd = nextNextHeadingIdx !== undefined ? nextNextHeadingIdx : blocks.length;
+
+      // Extract sections
+      const currentSection = blocks.slice(sectionStart, sectionEnd);
+      const nextSection = blocks.slice(nextSectionStart, nextSectionEnd);
+
+      // Rebuild blocks with swapped sections
+      const newBlocks = [
+        ...blocks.slice(0, sectionStart),
+        ...nextSection,
+        ...currentSection,
+        ...blocks.slice(nextSectionEnd),
+      ];
+
+      state.markdown = newBlocks;
+      return update(content, state);
+    }
+  }
+
+  /**
    * Parse the entire Markdown content into:
    * 1. Frontmatter -> ProjectState fields
    * 2. Body -> Array of ProjectMarkdown (tasks, headings, unrecognized)

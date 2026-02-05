@@ -929,4 +929,370 @@ right_now:
       expect(updated).toContain("custom_field: some_value");
     });
   });
+
+  describe("moveHeadingSection", () => {
+    const sampleContent = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+---
+# Section A
+- [ ] Task A1
+  Details for A1
+- [ ] Task A2
+
+## Section B
+- [ ] Task B1
+  Details for B1
+
+Some unrecognized content in section B
+
+### Section C
+- [ ] Task C1
+- [ ] Task C2
+  Multi-line details
+  for task C2
+`;
+
+    it("should move middle section up", () => {
+      const parsed = ProjectStateEditor.parse(sampleContent);
+      const blocks = parsed.markdown;
+
+      // Find index of "Section B" (should be at index 4)
+      const sectionBIndex = blocks.findIndex((b) => b.type === "heading" && (b as any).text === "Section B");
+      expect(sectionBIndex).toBeGreaterThan(0);
+
+      const result = ProjectStateEditor.moveHeadingSection(sampleContent, sectionBIndex, "up");
+      expect(result).not.toBe(null);
+
+      // Verify the order changed
+      const reparsed = ProjectStateEditor.parse(result!);
+      const headings = reparsed.markdown.filter((b) => b.type === "heading");
+
+      expect((headings[0] as any).text).toBe("Section B");
+      expect((headings[1] as any).text).toBe("Section A");
+      expect((headings[2] as any).text).toBe("Section C");
+    });
+
+    it("should move middle section down", () => {
+      const parsed = ProjectStateEditor.parse(sampleContent);
+      const blocks = parsed.markdown;
+
+      // Find index of "Section B"
+      const sectionBIndex = blocks.findIndex((b) => b.type === "heading" && (b as any).text === "Section B");
+
+      const result = ProjectStateEditor.moveHeadingSection(sampleContent, sectionBIndex, "down");
+      expect(result).not.toBe(null);
+
+      // Verify the order changed
+      const reparsed = ProjectStateEditor.parse(result!);
+      const headings = reparsed.markdown.filter((b) => b.type === "heading");
+
+      expect((headings[0] as any).text).toBe("Section A");
+      expect((headings[1] as any).text).toBe("Section C");
+      expect((headings[2] as any).text).toBe("Section B");
+    });
+
+    it("should preserve all task details and unrecognized blocks when moving up", () => {
+      const parsed = ProjectStateEditor.parse(sampleContent);
+      const blocks = parsed.markdown;
+
+      const sectionBIndex = blocks.findIndex((b) => b.type === "heading" && (b as any).text === "Section B");
+
+      const result = ProjectStateEditor.moveHeadingSection(sampleContent, sectionBIndex, "up");
+      expect(result).not.toBe(null);
+
+      // Verify all content is preserved
+      expect(result).toContain("Task A1");
+      expect(result).toContain("Details for A1");
+      expect(result).toContain("Task B1");
+      expect(result).toContain("Details for B1");
+      expect(result).toContain("Some unrecognized content in section B");
+      expect(result).toContain("Task C1");
+      expect(result).toContain("Multi-line details");
+    });
+
+    it("should preserve all task details and unrecognized blocks when moving down", () => {
+      const parsed = ProjectStateEditor.parse(sampleContent);
+      const blocks = parsed.markdown;
+
+      const sectionBIndex = blocks.findIndex((b) => b.type === "heading" && (b as any).text === "Section B");
+
+      const result = ProjectStateEditor.moveHeadingSection(sampleContent, sectionBIndex, "down");
+      expect(result).not.toBe(null);
+
+      // Verify all content is preserved
+      expect(result).toContain("Task A1");
+      expect(result).toContain("Details for A1");
+      expect(result).toContain("Task B1");
+      expect(result).toContain("Details for B1");
+      expect(result).toContain("Some unrecognized content in section B");
+      expect(result).toContain("Task C1");
+      expect(result).toContain("Multi-line details");
+    });
+
+    it("should return null when trying to move first section up", () => {
+      const parsed = ProjectStateEditor.parse(sampleContent);
+      const blocks = parsed.markdown;
+
+      const firstHeadingIndex = blocks.findIndex((b) => b.type === "heading");
+
+      const result = ProjectStateEditor.moveHeadingSection(sampleContent, firstHeadingIndex, "up");
+      expect(result).toBe(null);
+    });
+
+    it("should return null when trying to move last section down", () => {
+      const parsed = ProjectStateEditor.parse(sampleContent);
+      const blocks = parsed.markdown;
+
+      // Find the last heading
+      let lastHeadingIndex = -1;
+      for (let i = blocks.length - 1; i >= 0; i--) {
+        if (blocks[i].type === "heading") {
+          lastHeadingIndex = i;
+          break;
+        }
+      }
+
+      expect(lastHeadingIndex).toBeGreaterThan(0);
+
+      const result = ProjectStateEditor.moveHeadingSection(sampleContent, lastHeadingIndex, "down");
+      expect(result).toBe(null);
+    });
+
+    it("should return null when headingIndex is invalid", () => {
+      const parsed = ProjectStateEditor.parse(sampleContent);
+      const blocks = parsed.markdown;
+
+      // Find a task index (not a heading)
+      const taskIndex = blocks.findIndex((b) => b.type === "task");
+
+      const result = ProjectStateEditor.moveHeadingSection(sampleContent, taskIndex, "up");
+      expect(result).toBe(null);
+    });
+
+    it("should return null when headingIndex is out of bounds", () => {
+      const result1 = ProjectStateEditor.moveHeadingSection(sampleContent, -1, "up");
+      expect(result1).toBe(null);
+
+      const result2 = ProjectStateEditor.moveHeadingSection(sampleContent, 999, "down");
+      expect(result2).toBe(null);
+    });
+
+    it("should handle sections with no tasks (only unrecognized content)", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+---
+# Section 1
+Some prose content here.
+
+# Section 2
+- [ ] Task in section 2
+
+# Section 3
+More prose.
+`;
+      const parsed = ProjectStateEditor.parse(content);
+      const blocks = parsed.markdown;
+
+      const section1Index = blocks.findIndex((b) => b.type === "heading" && (b as any).text === "Section 1");
+
+      const result = ProjectStateEditor.moveHeadingSection(content, section1Index, "down");
+      expect(result).not.toBe(null);
+
+      // Verify order and content preservation
+      const reparsed = ProjectStateEditor.parse(result!);
+      const headings = reparsed.markdown.filter((b) => b.type === "heading");
+
+      expect((headings[0] as any).text).toBe("Section 2");
+      expect((headings[1] as any).text).toBe("Section 1");
+      expect((headings[2] as any).text).toBe("Section 3");
+
+      expect(result).toContain("Some prose content here.");
+      expect(result).toContain("Task in section 2");
+      expect(result).toContain("More prose.");
+    });
+
+    it("should handle moving sections with different heading levels", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+---
+# H1 Section
+- [ ] Task 1
+
+### H3 Section
+- [ ] Task 2
+
+## H2 Section
+- [ ] Task 3
+`;
+      const parsed = ProjectStateEditor.parse(content);
+      const blocks = parsed.markdown;
+
+      // Move H3 section up (should swap with H1)
+      const h3Index = blocks.findIndex((b) => b.type === "heading" && (b as any).text === "H3 Section");
+
+      const result = ProjectStateEditor.moveHeadingSection(content, h3Index, "up");
+      expect(result).not.toBe(null);
+
+      const reparsed = ProjectStateEditor.parse(result!);
+      const headings = reparsed.markdown.filter((b) => b.type === "heading");
+
+      expect((headings[0] as any).text).toBe("H3 Section");
+      expect((headings[0] as any).level).toBe(3);
+      expect((headings[1] as any).text).toBe("H1 Section");
+      expect((headings[1] as any).level).toBe(1);
+      expect((headings[2] as any).text).toBe("H2 Section");
+      expect((headings[2] as any).level).toBe(2);
+    });
+
+    it("should preserve section with multiple unrecognized blocks", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+---
+# Section 1
+- [ ] Task 1
+
+Paragraph 1
+
+> Blockquote
+
+\`\`\`
+Code block
+\`\`\`
+
+<!-- Comment -->
+
+# Section 2
+- [ ] Task 2
+`;
+      const parsed = ProjectStateEditor.parse(content);
+      const blocks = parsed.markdown;
+
+      const section1Index = blocks.findIndex((b) => b.type === "heading" && (b as any).text === "Section 1");
+
+      const result = ProjectStateEditor.moveHeadingSection(content, section1Index, "down");
+      expect(result).not.toBe(null);
+
+      // All unrecognized content should be preserved
+      expect(result).toContain("Paragraph 1");
+      expect(result).toContain("> Blockquote");
+      expect(result).toContain("Code block");
+      expect(result).toContain("<!-- Comment -->");
+      expect(result).toContain("Task 1");
+      expect(result).toContain("Task 2");
+
+      // Verify order changed
+      const reparsed = ProjectStateEditor.parse(result!);
+      const headings = reparsed.markdown.filter((b) => b.type === "heading");
+      expect((headings[0] as any).text).toBe("Section 2");
+      expect((headings[1] as any).text).toBe("Section 1");
+    });
+
+    it("should work with single-task sections", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+---
+# Section A
+- [ ] Only task
+
+# Section B
+- [ ] Another task
+
+# Section C
+- [ ] Third task
+`;
+      const parsed = ProjectStateEditor.parse(content);
+      const blocks = parsed.markdown;
+
+      const sectionBIndex = blocks.findIndex((b) => b.type === "heading" && (b as any).text === "Section B");
+
+      const result = ProjectStateEditor.moveHeadingSection(content, sectionBIndex, "up");
+      expect(result).not.toBe(null);
+
+      const reparsed = ProjectStateEditor.parse(result!);
+      const headings = reparsed.markdown.filter((b) => b.type === "heading");
+
+      expect((headings[0] as any).text).toBe("Section B");
+      expect((headings[1] as any).text).toBe("Section A");
+      expect((headings[2] as any).text).toBe("Section C");
+
+      // Verify tasks are in correct sections
+      const blocks2 = reparsed.markdown;
+      const sectionBNewIndex = blocks2.findIndex((b) => b.type === "heading" && (b as any).text === "Section B");
+      const nextBlock = blocks2[sectionBNewIndex + 1];
+      expect(nextBlock.type).toBe("task");
+      expect((nextBlock as any).name).toBe("Another task");
+    });
+
+    it("should preserve frontmatter when moving sections", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 50
+  break_duration: 15
+right_now:
+  work_state: working
+---
+# Section 1
+- [ ] Task 1
+
+# Section 2
+- [ ] Task 2
+`;
+      const parsed = ProjectStateEditor.parse(content);
+      const blocks = parsed.markdown;
+
+      const section1Index = blocks.findIndex((b) => b.type === "heading" && (b as any).text === "Section 1");
+
+      const result = ProjectStateEditor.moveHeadingSection(content, section1Index, "down");
+      expect(result).not.toBe(null);
+
+      // Verify frontmatter preserved
+      expect(result).toContain("work_duration: 50");
+      expect(result).toContain("break_duration: 15");
+      expect(result).toContain("work_state: working");
+
+      const reparsed = ProjectStateEditor.parse(result!);
+      expect(reparsed.pomodoroSettings.workDuration).toBe(50);
+      expect(reparsed.pomodoroSettings.breakDuration).toBe(15);
+      expect(reparsed.workState).toBe("working");
+    });
+
+    it("should handle empty sections (heading with no content before next heading)", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+---
+# Empty Section
+
+# Section with content
+- [ ] Task 1
+
+# Another empty section
+`;
+      const parsed = ProjectStateEditor.parse(content);
+      const blocks = parsed.markdown;
+
+      const emptyIndex = blocks.findIndex((b) => b.type === "heading" && (b as any).text === "Empty Section");
+
+      const result = ProjectStateEditor.moveHeadingSection(content, emptyIndex, "down");
+      expect(result).not.toBe(null);
+
+      const reparsed = ProjectStateEditor.parse(result!);
+      const headings = reparsed.markdown.filter((b) => b.type === "heading");
+
+      expect((headings[0] as any).text).toBe("Section with content");
+      expect((headings[1] as any).text).toBe("Empty Section");
+      expect((headings[2] as any).text).toBe("Another empty section");
+    });
+  });
 });
