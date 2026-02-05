@@ -12,6 +12,15 @@ interface StoreSchema {
   timing: Record<string, TimingDetails>;
 }
 
+/**
+ * Pure helper: compute next recentProjects list given an existing list and a new path.
+ * - Deduplicates and moves `path` to the front.
+ * - Limits to `limit` items (default 10).
+ */
+export function nextRecentProjects(existing: string[], path: string, limit = 10): string[] {
+  return [path, ...existing.filter((p) => p !== path)].slice(0, limit);
+}
+
 export class ProjectStore {
   private constructor(private store: Store) {}
 
@@ -42,7 +51,7 @@ export class ProjectStore {
 
   async addRecentProject(path: string): Promise<void> {
     const projects = await this.getRecentProjects();
-    const updated = [path, ...projects.filter((p) => p !== path)].slice(0, 10);
+    const updated = nextRecentProjects(projects, path);
     await this.store.set("recentProjects", updated);
     await this.store.set("lastActiveProject", path);
   }

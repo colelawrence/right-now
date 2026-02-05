@@ -7,6 +7,7 @@ import { SessionsDebugPanel } from "./components/SessionsDebugPanel";
 import { StateControls } from "./components/StateControls";
 import { TaskList } from "./components/TaskList";
 import { Timer } from "./components/Timer";
+import { Welcome } from "./components/Welcome";
 import { Markdown, MarkdownProvider } from "./components/markdown";
 import { type AppWindows, type ISoundManager, type ProjectManager, type ProjectStore, useDeepLink } from "./lib";
 import type { ProjectMarkdown } from "./lib/ProjectStateEditor";
@@ -206,13 +207,7 @@ function AppReady({ controllers, startupWarning }: { controllers: AppControllers
 
   // If no project is loaded, show the choose project UI
   if (!loaded || !project) {
-    return (
-      <AppNoProject
-        onOpenProject={() => projectManager.openProject()}
-        onOpenFolder={() => projectManager.openProjectFolder()}
-        startupWarning={startupWarning}
-      />
-    );
+    return <Welcome projectManager={projectManager} projectStore={projectStore} startupWarning={startupWarning} />;
   }
 
   const endTime =
@@ -485,43 +480,6 @@ function AppPlanner({
           <StateControls project={project} onStateChange={onStateChange} toggleCompact={toggleCompact} />
         </div>
       </footer>
-    </main>
-  );
-}
-
-function AppNoProject({
-  onOpenProject,
-  onOpenFolder,
-  startupWarning,
-}: { onOpenProject: () => void; onOpenFolder: () => void; startupWarning?: StartupWarning }) {
-  return (
-    <main className="h-screen flex flex-col items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
-      <h1 className="text-xl font-semibold text-gray-800 mb-3">Welcome to Right Now</h1>
-      <p className="text-sm text-gray-600 mb-6">Choose a project file or folder to begin</p>
-
-      {startupWarning && (
-        <div className="mb-6 max-w-md px-4 py-3 bg-yellow-50 border border-yellow-200 rounded">
-          <p className="text-sm text-yellow-800 font-medium mb-1">{startupWarning.message}</p>
-          {startupWarning.details && (
-            <p className="text-xs text-yellow-700 font-mono break-all">{startupWarning.details}</p>
-          )}
-        </div>
-      )}
-
-      <div className="flex gap-3">
-        <button
-          onClick={onOpenProject}
-          className="px-5 py-2.5 bg-blue-600 text-white text-sm hover:bg-blue-700 transition-all hover:shadow-md active:scale-95"
-        >
-          Open File...
-        </button>
-        <button
-          onClick={onOpenFolder}
-          className="px-5 py-2.5 bg-gray-600 text-white text-sm hover:bg-gray-700 transition-all hover:shadow-md active:scale-95"
-        >
-          Open Folder...
-        </button>
-      </div>
     </main>
   );
 }
