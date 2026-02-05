@@ -16,7 +16,21 @@
 1. Read **Part 0** (Executive Blueprint) first. It defines the contract, non-goals, and the “shape” of the product.
 2. Skim **Part I** (Gap Analysis) to see what’s missing.
 3. Implement by **Phases** (Part IV), using the **Quality Gates** as stop-ship criteria.
-4. Convert the **Master TODO Inventory** (Part X) into whatever tracker we’re using.
+4. Track day-to-day execution in `br` (beads). Treat this plan as the narrative/spec; update it when architecture/decisions change.
+
+**Execution tracking (beads)**
+
+- Canonical backlog: `.beads/issues.jsonl` (committed). Local DB: `.beads/beads.db` (ignored).
+- Epics that implement this plan:
+  - `bd-gzh` — Local v0.2 cohesive UX
+  - `bd-1kv` — Sessions UI integration (daemon ↔ UI)
+  - `bd-2di` — Packaging hardening (bundle daemon/CLI, deep links, no test harness)
+- Out of scope / deferred:
+  - `bd-1lt` — Connected mode MVP (deferred)
+- Useful commands:
+  - `br epic status`
+  - `br ready -t task`
+  - `br show <id>`
 
 > Note on backward compatibility: this repo is internal/experimental; we do **not** need to preserve backwards compatibility for settings/state files or on-disk formats unless a task explicitly asks for it.
 
@@ -335,11 +349,11 @@ Exit criteria:
 
 ## PART X — Master TODO inventory (task specs)
 
-> These tasks are written to be small and verifiable (Context → Done means → Verification → RGR).
+> These tasks are written to be small and verifiable (Context → Done means → Verification → RGR). Each item is tracked in beads; the bead ID is included in the heading.
 
 ### A) Welcome + onboarding
 
-#### A1. Welcome screen lists recent projects and opens directly
+#### A1 (bd-gzh.1). Welcome screen lists recent projects and opens directly
 
 Context:
 - Current Welcome only shows an Open button and the app always drives a file dialog. This blocks fast repeat usage.
@@ -357,7 +371,7 @@ RGR:
 - Green: implement minimal Welcome UI + load action.
 - Refactor: extract Welcome into its own component and keep App.tsx thin.
 
-#### A2. Walkthrough: explain the model (“edit in your editor; Right Now reacts”)
+#### A2 (bd-gzh.4). Walkthrough: explain the model (“edit in your editor; Right Now reacts”)
 
 Done means:
 - First-run walkthrough exists (dismissible).
@@ -367,7 +381,7 @@ Done means:
 Verification:
 - Manual: fresh profile shows walkthrough once; later accessible via a button.
 
-#### A3. Startup: auto-load last active project without prompting
+#### A3 (bd-gzh.2). Startup: auto-load last active project without prompting
 
 Context:
 - main.tsx currently calls openProject(lastProject) which still opens a dialog.
@@ -379,11 +393,60 @@ Done means:
 Verification:
 - Manual: set lastActiveProject, relaunch, ensure it loads without dialog. Rename/delete file, relaunch, ensure fallback UI appears.
 
+#### A4 (bd-gzh.3). Project picker: Support opening a TODO.md file directly
+
+Context:
+- The project picker currently biases toward folders. Users should be able to open an existing TODO file directly when they already have one.
+
+Done means:
+- The UI offers a clear way to open either a folder or a specific TODO.md file (either two buttons, or a picker config that supports both).
+- Selecting a file loads it as the active project and sets up file watching.
+
+Verification:
+- Manual: open a TODO.md file directly and confirm the app loads it and reacts to external edits.
+
+RGR:
+- Red: add a failing E2E harness test that loads a fixture via an absolute file path.
+- Green: implement picker changes.
+- Refactor: keep picker logic explicit (avoid “magic” filename heuristics when a file is selected).
+
+#### A5 (bd-gzh.5). Editor ergonomics: Make “Open TODO file” the primary workflow
+
+Context:
+- The Planner is intentionally not a full editor. The fastest path should be “jump to my editor”, then let Right Now react.
+
+Done means:
+- Prominent “Open TODO file” affordance exists in Planner and Tracker.
+- Tray menu has an enabled “Edit TODO File” action whenever a project is loaded (already present; ensure it stays wired).
+- Optional: reveal in Finder + copy path.
+
+Verification:
+- Manual: from Welcome/Planner/Tracker/Tray, open the TODO file quickly and see edits reflected back in the app.
+
+#### A6 (bd-gzh.6). Reorder (nuanced): Move entire heading sections up/down
+
+Context:
+- Reordering can be valuable, but per-task reorder is risky with markdown details/unrecognized blocks. Prefer moving whole sections.
+
+Done means:
+- Provide UI affordances to move a whole heading section up/down.
+- Moving a section preserves the heading, its tasks, and any relevant unrecognized blocks.
+- No per-task reorder is introduced in this iteration.
+
+Verification:
+- Manual: reorder two sections and confirm TODO.md remains readable and stable.
+- Unit: snapshot test covers headings + details + unrecognized blocks.
+
+RGR:
+- Red: write failing unit test demonstrating correct section movement.
+- Green: implement a pure section-move helper in ProjectStateEditor.
+- Refactor: keep UI thin; transformation logic well-tested.
+
 ---
 
 ### B) Persisted timer state
 
-#### B1. Persist work/break state + timestamps in frontmatter
+#### B1 (bd-gzh.7). Persist work/break state + timestamps in frontmatter
 
 Context:
 - WorkState/stateTransitions are ephemeral; restart loses timer state.
@@ -399,7 +462,7 @@ Verification:
 
 ### C) Sessions UI integration
 
-#### C1. Implement SessionClient (daemon RPC bridge)
+#### C1 (bd-1kv.1). Implement SessionClient (daemon RPC bridge)
 
 Done means:
 - UI can list/start/stop/continue sessions via a SessionClient.
@@ -408,7 +471,7 @@ Done means:
 Verification:
 - Manual: start/stop works from UI.
 
-#### C2. Render session status + Start/Continue/Stop CTAs in TaskList
+#### C2 (bd-1kv.2). Render session status + Start/Continue/Stop CTAs in TaskList
 
 Done means:
 - Task rows show Running/Waiting/Stopped.
@@ -417,7 +480,7 @@ Done means:
 Verification:
 - Manual: start session from UI; see badge/state update.
 
-#### C3. Deep links: route todos://session/<id> to Continue/Attach UX
+#### C3 (bd-1kv.3). Deep links: route todos://session/<id> to Continue/Attach UX
 
 Done means:
 - On macOS: `open "todos://session/42"` focuses the app and routes to session 42.
@@ -425,7 +488,7 @@ Done means:
 Verification:
 - Manual smoke test on macOS.
 
-#### C4. Add a session list surface (running/waiting/stopped)
+#### C4 (bd-1kv.4). Add a session list surface (running/waiting/stopped)
 
 Done means:
 - UI surface lists sessions with status, task, project path.
@@ -438,7 +501,7 @@ Verification:
 
 ### D) Packaging hardening
 
-#### D1. Exclude rn-test-harness from release builds
+#### D1 (bd-2di.1). Exclude rn-test-harness from release builds
 
 Done means:
 - Release builds do not depend on rn-test-harness.
@@ -447,7 +510,7 @@ Done means:
 Verification:
 - Delete target/release/rn-test-harness and run: `bun run tauri build`.
 
-#### D2. Bundle daemon + todo CLI intentionally
+#### D2 (bd-2di.2). Bundle daemon + todo CLI intentionally
 
 Done means:
 - Release bundle includes required sidecars and they are discoverable at runtime.
@@ -455,7 +518,7 @@ Done means:
 Verification:
 - Install DMG and run a session start/continue/stop flow without dev tooling.
 
-#### D3. Add scripted post-build smoke test
+#### D3 (bd-2di.3). Add scripted post-build smoke test
 
 Done means:
 - A script validates the built bundle contents and a minimal smoke flow.
