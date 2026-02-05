@@ -27,3 +27,6 @@ target
 *.sln
 *.sw?
 dist-test/
+
+# bv (beads viewer) local config and caches
+.bv/
