@@ -22,7 +22,9 @@ describe("Welcome component", () => {
     const projectManager = createMockProjectManager();
     const projectStore = createMockProjectStore();
 
-    const html = renderToStaticMarkup(<Welcome projectManager={projectManager} projectStore={projectStore} />);
+    const html = renderToStaticMarkup(
+      <Welcome projectManager={projectManager} projectStore={projectStore} onShowWalkthrough={() => {}} />,
+    );
 
     expect(html).toContain("Welcome to Right Now");
   });
@@ -31,7 +33,9 @@ describe("Welcome component", () => {
     const projectManager = createMockProjectManager();
     const projectStore = createMockProjectStore();
 
-    const html = renderToStaticMarkup(<Welcome projectManager={projectManager} projectStore={projectStore} />);
+    const html = renderToStaticMarkup(
+      <Welcome projectManager={projectManager} projectStore={projectStore} onShowWalkthrough={() => {}} />,
+    );
 
     expect(html).toContain("Open File...");
     expect(html).toContain("Open Folder...");
@@ -46,7 +50,12 @@ describe("Welcome component", () => {
     };
 
     const html = renderToStaticMarkup(
-      <Welcome projectManager={projectManager} projectStore={projectStore} startupWarning={startupWarning} />,
+      <Welcome
+        projectManager={projectManager}
+        projectStore={projectStore}
+        startupWarning={startupWarning}
+        onShowWalkthrough={() => {}}
+      />,
     );
 
     expect(html).toContain("Test warning");
@@ -62,8 +71,21 @@ describe("Welcome component", () => {
     const projectStore = createMockProjectStore(["/Users/test/project1/TODO.md", "/Users/test/project2/TODO.md"]);
 
     // Should render without throwing, even though recent projects won't appear in SSR
-    const html = renderToStaticMarkup(<Welcome projectManager={projectManager} projectStore={projectStore} />);
+    const html = renderToStaticMarkup(
+      <Welcome projectManager={projectManager} projectStore={projectStore} onShowWalkthrough={() => {}} />,
+    );
 
     expect(html).toContain("Welcome to Right Now");
+  });
+
+  it("renders show walkthrough button", () => {
+    const projectManager = createMockProjectManager();
+    const projectStore = createMockProjectStore();
+
+    const html = renderToStaticMarkup(
+      <Welcome projectManager={projectManager} projectStore={projectStore} onShowWalkthrough={() => {}} />,
+    );
+
+    expect(html).toContain("Show walkthrough");
   });
 });

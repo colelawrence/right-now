@@ -10,9 +10,10 @@ interface WelcomeProps {
   projectManager: ProjectManager;
   projectStore: ProjectStore;
   startupWarning?: StartupWarning;
+  onShowWalkthrough: () => void;
 }
 
-export function Welcome({ projectManager, projectStore, startupWarning }: WelcomeProps) {
+export function Welcome({ projectManager, projectStore, startupWarning, onShowWalkthrough }: WelcomeProps) {
   const [recentProjects, setRecentProjects] = useState<string[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -91,6 +92,13 @@ export function Welcome({ projectManager, projectStore, startupWarning }: Welcom
           Open Folder...
         </button>
       </div>
+
+      <button
+        onClick={onShowWalkthrough}
+        className="mt-4 text-sm text-gray-600 hover:text-gray-800 underline decoration-dotted"
+      >
+        Show walkthrough
+      </button>
     </main>
   );
 }

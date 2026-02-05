@@ -65,5 +65,13 @@ describe("Module exports are defined", () => {
         expect(result).toBeDefined();
       }).not.toThrow();
     });
+
+    it("Walkthrough can be called as a function", async () => {
+      const { Walkthrough } = await import("../components/Walkthrough");
+      expect(() => {
+        const result = Walkthrough({ onDismiss: () => {} });
+        expect(result).toBeDefined();
+      }).not.toThrow();
+    });
   });
 });

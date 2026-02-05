@@ -7,6 +7,7 @@ import { SessionsDebugPanel } from "./components/SessionsDebugPanel";
 import { StateControls } from "./components/StateControls";
 import { TaskList } from "./components/TaskList";
 import { Timer } from "./components/Timer";
+import { Walkthrough } from "./components/Walkthrough";
 import { Welcome } from "./components/Welcome";
 import { Markdown, MarkdownProvider } from "./components/markdown";
 import { type AppWindows, type ISoundManager, type ProjectManager, type ProjectStore, useDeepLink } from "./lib";
@@ -95,6 +96,16 @@ function AppReady({ controllers, startupWarning }: { controllers: AppControllers
   const project = loaded?.projectFile;
   const [isCompact, setIsCompact] = useAtom(appWindows.currentlyMiniAtom);
   const timerStateRef = useRef<Partial<TimerState>>({});
+  const [showWalkthrough, setShowWalkthrough] = useState(false);
+
+  // Check if user has seen walkthrough on mount
+  useEffect(() => {
+    projectStore.getHasSeenWalkthrough().then((hasSeen) => {
+      if (!hasSeen) {
+        setShowWalkthrough(true);
+      }
+    });
+  }, [projectStore]);
 
   // Get the directory containing the project file for resolving relative paths
   const projectDir = loaded?.fullPath?.split("/").slice(0, -1).join("/");
@@ -205,9 +216,28 @@ function AppReady({ controllers, startupWarning }: { controllers: AppControllers
     });
   };
 
+  const handleDismissWalkthrough = async () => {
+    setShowWalkthrough(false);
+    await projectStore.setHasSeenWalkthrough(true);
+  };
+
+  const handleShowWalkthrough = () => {
+    setShowWalkthrough(true);
+  };
+
   // If no project is loaded, show the choose project UI
   if (!loaded || !project) {
-    return <Welcome projectManager={projectManager} projectStore={projectStore} startupWarning={startupWarning} />;
+    return (
+      <>
+        <Welcome
+          projectManager={projectManager}
+          projectStore={projectStore}
+          startupWarning={startupWarning}
+          onShowWalkthrough={handleShowWalkthrough}
+        />
+        {showWalkthrough && <Walkthrough onDismiss={handleDismissWalkthrough} />}
+      </>
+    );
   }
 
   const endTime =
@@ -229,11 +259,13 @@ function AppReady({ controllers, startupWarning }: { controllers: AppControllers
       await projectManager.updateProject((draft) => handleCompleteTask(task, draft));
     },
     toggleCompact: () => setIsCompact(!isCompact),
+    onShowWalkthrough: handleShowWalkthrough,
   };
 
   return (
     <MarkdownProvider basePath={projectDir}>
       {isCompact ? <AppCompact {...commonProps} /> : <AppPlanner {...commonProps} />}
+      {showWalkthrough && <Walkthrough onDismiss={handleDismissWalkthrough} />}
     </MarkdownProvider>
   );
 }
@@ -249,6 +281,7 @@ interface AppViewProps {
   onOpenFolder: () => void;
   onCompleteTask: (task: ProjectMarkdown & { type: "task" }) => void;
   toggleCompact: () => void;
+  onShowWalkthrough: () => void;
 }
 
 function useCurrentTask(project: LoadedProjectState) {
@@ -401,6 +434,7 @@ function AppPlanner({
   onOpenProject,
   onOpenFolder,
   toggleCompact,
+  onShowWalkthrough,
 }: AppViewProps) {
   const sessionsDebugEnabled = import.meta.env.DEV;
   const [showSessionsDebug, setShowSessionsDebug] = useState(false);
@@ -442,6 +476,12 @@ function AppPlanner({
               children={[loaded.fullPath.split("/").slice(-2).join("/"), <IconEdit size={12} />]}
             />
           )}
+          <button
+            onClick={onShowWalkthrough}
+            className="text-xs px-3 py-1.5 text-gray-600 hover:bg-gray-100 transition-colors"
+            title="Show walkthrough"
+            children="?"
+          />
           <button
             onClick={onOpenProject}
             className="text-xs px-3 py-1.5 text-gray-600 hover:bg-gray-100 transition-colors"

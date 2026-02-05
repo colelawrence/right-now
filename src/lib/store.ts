@@ -9,6 +9,7 @@ interface TimingDetails {
 interface StoreSchema {
   recentProjects: string[];
   lastActiveProject?: string;
+  hasSeenWalkthrough?: boolean;
   timing: Record<string, TimingDetails>;
 }
 
@@ -54,6 +55,14 @@ export class ProjectStore {
     const updated = nextRecentProjects(projects, path);
     await this.store.set("recentProjects", updated);
     await this.store.set("lastActiveProject", path);
+  }
+
+  async getHasSeenWalkthrough(): Promise<boolean> {
+    return (await this.store.get("hasSeenWalkthrough")) ?? false;
+  }
+
+  async setHasSeenWalkthrough(seen: boolean): Promise<void> {
+    await this.store.set("hasSeenWalkthrough", seen);
   }
 
   async getTaskTiming(taskId: string): Promise<TimingDetails | undefined> {
