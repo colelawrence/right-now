@@ -688,4 +688,245 @@ pomodoro_settings:
       expect(updated).not.toContain("todos://session");
     });
   });
+
+  describe("timer state persistence", () => {
+    it("should parse timer state from frontmatter", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+right_now:
+  work_state: working
+  state_transitions:
+    started_at: 1609459200000
+    ends_at: 1609460700000
+---
+- [ ] Task 1
+`;
+      const parsed = ProjectStateEditor.parse(content);
+
+      expect(parsed.workState).toBe("working");
+      expect(parsed.stateTransitions).toEqual({
+        startedAt: 1609459200000,
+        endsAt: 1609460700000,
+      });
+    });
+
+    it("should handle missing timer state gracefully", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+---
+- [ ] Task 1
+`;
+      const parsed = ProjectStateEditor.parse(content);
+
+      expect(parsed.workState).toBeUndefined();
+      expect(parsed.stateTransitions).toBeUndefined();
+    });
+
+    it("should handle planning state (no endsAt)", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+right_now:
+  work_state: planning
+  state_transitions:
+    started_at: 1609459200000
+---
+- [ ] Task 1
+`;
+      const parsed = ProjectStateEditor.parse(content);
+
+      expect(parsed.workState).toBe("planning");
+      expect(parsed.stateTransitions).toEqual({
+        startedAt: 1609459200000,
+        endsAt: undefined,
+      });
+    });
+
+    it("should handle break state", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+right_now:
+  work_state: break
+  state_transitions:
+    started_at: 1609459200000
+    ends_at: 1609459500000
+---
+- [ ] Task 1
+`;
+      const parsed = ProjectStateEditor.parse(content);
+
+      expect(parsed.workState).toBe("break");
+      expect(parsed.stateTransitions?.startedAt).toBe(1609459200000);
+      expect(parsed.stateTransitions?.endsAt).toBe(1609459500000);
+    });
+
+    it("should write timer state to frontmatter", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+---
+- [ ] Task 1
+`;
+      const parsed = ProjectStateEditor.parse(content);
+
+      parsed.workState = "working";
+      parsed.stateTransitions = {
+        startedAt: 1609459200000,
+        endsAt: 1609460700000,
+      };
+
+      const updated = ProjectStateEditor.update(content, parsed);
+
+      expect(updated).toContain("work_state: working");
+      expect(updated).toContain("started_at: 1609459200000");
+      expect(updated).toContain("ends_at: 1609460700000");
+    });
+
+    it("should preserve timer state during round-trip", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+right_now:
+  work_state: working
+  state_transitions:
+    started_at: 1609459200000
+    ends_at: 1609460700000
+---
+- [ ] Task 1
+`;
+      const parsed = ProjectStateEditor.parse(content);
+      const updated = ProjectStateEditor.update(content, parsed);
+
+      const reparsed = ProjectStateEditor.parse(updated);
+      expect(reparsed.workState).toBe("working");
+      expect(reparsed.stateTransitions).toEqual({
+        startedAt: 1609459200000,
+        endsAt: 1609460700000,
+      });
+    });
+
+    it("should update timer state independently of other fields", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+right_now:
+  work_state: planning
+  state_transitions:
+    started_at: 1609459200000
+---
+- [ ] Task 1
+`;
+      const parsed = ProjectStateEditor.parse(content);
+
+      // Update only timer state
+      parsed.workState = "working";
+      parsed.stateTransitions = {
+        startedAt: 1609459300000,
+        endsAt: 1609460800000,
+      };
+
+      const updated = ProjectStateEditor.update(content, parsed);
+
+      // Pomodoro settings should be unchanged
+      expect(updated).toContain("work_duration: 25");
+      expect(updated).toContain("break_duration: 5");
+
+      // Timer state should be updated
+      expect(updated).toContain("work_state: working");
+      expect(updated).toContain("started_at: 1609459300000");
+      expect(updated).toContain("ends_at: 1609460800000");
+
+      // Body should be unchanged
+      expect(updated).toContain("- [ ] Task 1");
+    });
+
+    it("should handle invalid timer state gracefully", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+right_now:
+  work_state: invalid_state
+  state_transitions:
+    started_at: "not a number"
+    ends_at: null
+---
+- [ ] Task 1
+`;
+      const parsed = ProjectStateEditor.parse(content);
+
+      // Invalid work_state should still be parsed (type safety is at runtime)
+      expect(parsed.workState).toBe("invalid_state");
+
+      // Invalid timestamps should result in undefined
+      expect(parsed.stateTransitions?.startedAt).toBeUndefined();
+      expect(parsed.stateTransitions?.endsAt).toBeUndefined();
+    });
+
+    it("should write planning state without endsAt", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+---
+- [ ] Task 1
+`;
+      const parsed = ProjectStateEditor.parse(content);
+
+      parsed.workState = "planning";
+      parsed.stateTransitions = {
+        startedAt: 1609459200000,
+      };
+
+      const updated = ProjectStateEditor.update(content, parsed);
+
+      expect(updated).toContain("work_state: planning");
+      expect(updated).toContain("started_at: 1609459200000");
+      expect(updated).not.toContain("ends_at");
+    });
+
+    it("should preserve other right_now fields if they exist", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+right_now:
+  work_state: working
+  state_transitions:
+    started_at: 1609459200000
+    ends_at: 1609460700000
+  custom_field: some_value
+---
+- [ ] Task 1
+`;
+      const parsed = ProjectStateEditor.parse(content);
+
+      // Update timer state
+      parsed.workState = "break";
+      parsed.stateTransitions = {
+        startedAt: 1609459300000,
+        endsAt: 1609459600000,
+      };
+
+      const updated = ProjectStateEditor.update(content, parsed);
+
+      // Timer state should be updated
+      expect(updated).toContain("work_state: break");
+      expect(updated).toContain("started_at: 1609459300000");
+      expect(updated).toContain("ends_at: 1609459600000");
+
+      // Custom field should be preserved
+      expect(updated).toContain("custom_field: some_value");
+    });
+  });
 });

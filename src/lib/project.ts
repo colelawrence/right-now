@@ -152,11 +152,33 @@ pomodoro_settings:
 
         if (token !== this.loadToken) return;
 
+        // Restore workState/stateTransitions from file when valid; otherwise keep current in-memory state.
+        const prev = this.currentFile?.fullPath === fullPath ? this.currentFile : undefined;
+
+        const workStateFromFile = projectFile.workState;
+        const workState: WorkState =
+          workStateFromFile === "planning" || workStateFromFile === "working" || workStateFromFile === "break"
+            ? workStateFromFile
+            : (prev?.workState ?? "planning");
+
+        const transitionsFromFile = projectFile.stateTransitions;
+        const stateTransitions: StateTransition =
+          transitionsFromFile && typeof transitionsFromFile.startedAt === "number"
+            ? {
+                startedAt: transitionsFromFile.startedAt,
+                endsAt: typeof transitionsFromFile.endsAt === "number" ? transitionsFromFile.endsAt : undefined,
+              }
+            : (prev?.stateTransitions ?? {
+                startedAt: this.clock.now(),
+              });
+
         if (this.currentFile?.fullPath === fullPath) {
           this.currentFile = {
             ...this.currentFile,
             textContent,
             projectFile,
+            workState,
+            stateTransitions,
           };
         } else {
           this.currentFile = {
@@ -164,10 +186,8 @@ pomodoro_settings:
             textContent,
             projectFile,
             virtual: type === "virtual",
-            workState: "planning",
-            stateTransitions: {
-              startedAt: this.clock.now(),
-            },
+            workState,
+            stateTransitions,
           };
         }
 
@@ -212,77 +232,86 @@ pomodoro_settings:
   }
 
   async updateProject(fn: (project: ProjectFile) => void | boolean) {
-    return await this.enqueueOp(async () => {
-      if (!this.currentFile) return;
+    return await this.enqueueOp(() => this.updateProjectImpl(fn));
+  }
 
-      const fullPath = this.currentFile.fullPath;
-      const token = this.loadToken;
+  /**
+   * Core update logic for mutating and persisting the project file.
+   *
+   * IMPORTANT: This must not call enqueueOp() internally.
+   * - Use updateProject() to run it through the opChain.
+   * - Or call it directly from within an already-enqueued op.
+   */
+  private async updateProjectImpl(fn: (project: ProjectFile) => void | boolean): Promise<void> {
+    if (!this.currentFile) return;
 
-      // Always read fresh before writing to avoid clobbering edits from the user, editor, or daemon.
-      const freshContent = await readTextFile(fullPath).catch(
-        withError((err) => `Error reading file (${fullPath}): ${JSON.stringify(err)}`, ProjectError),
-      );
+    const fullPath = this.currentFile.fullPath;
+    const token = this.loadToken;
 
-      // If a different project load was requested mid-operation, bail.
-      if (token !== this.loadToken) return;
+    // Always read fresh before writing to avoid clobbering edits from the user, editor, or daemon.
+    const freshContent = await readTextFile(fullPath).catch(
+      withError((err) => `Error reading file (${fullPath}): ${JSON.stringify(err)}`, ProjectError),
+    );
 
-      let freshProjectFile: ProjectFile;
-      try {
-        freshProjectFile = ProjectStateEditor.parse(freshContent);
-      } catch (error) {
-        // The file might be mid-edit (invalid YAML/frontmatter, partial saves, etc).
-        // Avoid clobbering it; wait for the next reload to restore a valid state.
-        console.error("Failed to parse fresh project file before write", { fullPath, error });
-        return;
+    // If a different project load was requested mid-operation, bail.
+    if (token !== this.loadToken) return;
+
+    let freshProjectFile: ProjectFile;
+    try {
+      freshProjectFile = ProjectStateEditor.parse(freshContent);
+    } catch (error) {
+      // The file might be mid-edit (invalid YAML/frontmatter, partial saves, etc).
+      // Avoid clobbering it; wait for the next reload to restore a valid state.
+      console.error("Failed to parse fresh project file before write", { fullPath, error });
+      return;
+    }
+
+    const draft = structuredClone(freshProjectFile);
+
+    if (fn(draft) === false) return;
+
+    let updatedContent: string;
+    try {
+      updatedContent = ProjectStateEditor.update(freshContent, draft);
+    } catch (error) {
+      console.error("Failed to update project file content", { fullPath, error });
+      return;
+    }
+
+    // No-op write: still refresh in-memory content if it drifted.
+    if (updatedContent === freshContent) {
+      if (this.currentFile?.fullPath === fullPath && this.currentFile.textContent !== freshContent) {
+        this.currentFile = {
+          ...this.currentFile,
+          textContent: freshContent,
+          projectFile: freshProjectFile,
+        };
+        await this.notifySubscribers(this.currentFile);
       }
+      return;
+    }
 
-      const draft = structuredClone(freshProjectFile);
+    await this.writeTextFileAtomic(fullPath, updatedContent);
 
-      if (fn(draft) === false) return;
+    // Update in-memory state to match what we just wrote (prevents a redundant watcher reload).
+    if (token !== this.loadToken) return;
+    if (!this.currentFile || this.currentFile.fullPath !== fullPath) return;
 
-      let updatedContent: string;
-      try {
-        updatedContent = ProjectStateEditor.update(freshContent, draft);
-      } catch (error) {
-        console.error("Failed to update project file content", { fullPath, error });
-        return;
-      }
+    let projectFile: ProjectFile;
+    try {
+      projectFile = ProjectStateEditor.parse(updatedContent);
+    } catch {
+      // Shouldn't happen since we generated the content, but be defensive.
+      projectFile = draft;
+    }
 
-      // No-op write: still refresh in-memory content if it drifted.
-      if (updatedContent === freshContent) {
-        if (this.currentFile?.fullPath === fullPath && this.currentFile.textContent !== freshContent) {
-          this.currentFile = {
-            ...this.currentFile,
-            textContent: freshContent,
-            projectFile: freshProjectFile,
-          };
-          await this.notifySubscribers(this.currentFile);
-        }
-        return;
-      }
+    this.currentFile = {
+      ...this.currentFile,
+      textContent: updatedContent,
+      projectFile,
+    };
 
-      await this.writeTextFileAtomic(fullPath, updatedContent);
-
-      // Update in-memory state to match what we just wrote (prevents a redundant watcher reload).
-      if (token !== this.loadToken) return;
-      if (!this.currentFile || this.currentFile.fullPath !== fullPath) return;
-
-      let projectFile: ProjectFile;
-      try {
-        projectFile = ProjectStateEditor.parse(updatedContent);
-      } catch {
-        // Shouldn't happen since we generated the content, but be defensive.
-        projectFile = draft;
-      }
-
-      this.currentFile = {
-        ...this.currentFile,
-        textContent: updatedContent,
-        projectFile,
-      };
-
-      await this.notifySubscribers(this.currentFile);
-    });
+    await this.notifySubscribers(this.currentFile);
   }
 
   async updateWorkState(newState: WorkState): Promise<void> {
@@ -293,21 +322,30 @@ pomodoro_settings:
       if (this.currentFile.workState === newState) return;
 
       const startedAt = this.clock.now();
+      const stateTransitions = {
+        startedAt,
+        endsAt:
+          newState === "working"
+            ? startedAt + this.currentFile.projectFile.pomodoroSettings.workDuration * 60 * 1000
+            : newState === "break"
+              ? startedAt + this.currentFile.projectFile.pomodoroSettings.breakDuration * 60 * 1000
+              : undefined,
+      };
+
+      // Update in-memory state
       this.currentFile = {
         ...this.currentFile,
         workState: newState,
-        stateTransitions: {
-          startedAt,
-          endsAt:
-            newState === "working"
-              ? startedAt + this.currentFile.projectFile.pomodoroSettings.workDuration * 60 * 1000
-              : newState === "break"
-                ? startedAt + this.currentFile.projectFile.pomodoroSettings.breakDuration * 60 * 1000
-                : undefined,
-        },
+        stateTransitions,
       };
 
       await this.notifySubscribers(this.currentFile);
+
+      // Persist to file
+      await this.updateProjectImpl((draft) => {
+        draft.workState = newState;
+        draft.stateTransitions = stateTransitions;
+      });
     });
   }
 
@@ -315,12 +353,20 @@ pomodoro_settings:
     return await this.enqueueOp(async () => {
       if (!this.currentFile) return;
 
+      const newTransitions = { ...this.currentFile.stateTransitions, ...transitions };
+
+      // Update in-memory state
       this.currentFile = {
         ...this.currentFile,
-        stateTransitions: { ...this.currentFile.stateTransitions, ...transitions },
+        stateTransitions: newTransitions,
       };
 
       await this.notifySubscribers(this.currentFile);
+
+      // Persist to file
+      await this.updateProjectImpl((draft) => {
+        draft.stateTransitions = newTransitions;
+      });
     });
   }
 

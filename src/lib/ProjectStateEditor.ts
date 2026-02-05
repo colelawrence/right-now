@@ -103,6 +103,11 @@ export interface ProjectFile {
     workDuration: number;
     breakDuration: number;
   };
+  workState?: "planning" | "working" | "break";
+  stateTransitions?: {
+    startedAt: number;
+    endsAt?: number;
+  };
   markdown: ProjectMarkdown[];
 }
 
@@ -124,6 +129,20 @@ export namespace ProjectStateEditor {
         workDuration: front.pomodoro_settings?.work_duration ?? 25,
         breakDuration: front.pomodoro_settings?.break_duration ?? 5,
       },
+      // Parse timer state from namespaced frontmatter (right_now)
+      workState: front.right_now?.work_state,
+      stateTransitions: front.right_now?.state_transitions
+        ? {
+            startedAt:
+              typeof front.right_now.state_transitions.started_at === "number"
+                ? front.right_now.state_transitions.started_at
+                : undefined,
+            endsAt:
+              typeof front.right_now.state_transitions.ends_at === "number"
+                ? front.right_now.state_transitions.ends_at
+                : undefined,
+          }
+        : undefined,
       // 3. Parse the body into structured blocks
       markdown: parseBody(file.content),
     };
@@ -146,6 +165,22 @@ export namespace ProjectStateEditor {
     front.pomodoro_settings = front.pomodoro_settings || {};
     front.pomodoro_settings.work_duration = state.pomodoroSettings.workDuration;
     front.pomodoro_settings.break_duration = state.pomodoroSettings.breakDuration;
+
+    // Update timer state in namespaced frontmatter (right_now)
+    if (state.workState !== undefined || state.stateTransitions !== undefined) {
+      front.right_now = front.right_now || {};
+
+      if (state.workState !== undefined) {
+        front.right_now.work_state = state.workState;
+      }
+
+      if (state.stateTransitions !== undefined) {
+        front.right_now.state_transitions = {
+          started_at: state.stateTransitions.startedAt,
+          ...(state.stateTransitions.endsAt !== undefined && { ends_at: state.stateTransitions.endsAt }),
+        };
+      }
+    }
 
     // 4. Rebuild the body from the current markdown blocks
     const updatedBody = stringifyProjectMarkdown(state.markdown);
