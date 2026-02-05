@@ -1,4 +1,6 @@
+import { Window } from "@tauri-apps/api/window";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { sessionClient } from "../SessionClient";
 import type { LinkHandlerResult, LinkType } from "./types";
 
 /**
@@ -58,7 +60,7 @@ export async function handleLink(href: string, basePath?: string): Promise<LinkH
       return handleExternalLink(linkType.url);
 
     case "todos-protocol":
-      return handleTodosProtocol(linkType.action, linkType.params);
+      return await handleTodosProtocol(linkType.action, linkType.params);
 
     case "file":
       return handleFilePath(linkType.path, basePath);
@@ -77,12 +79,25 @@ async function handleExternalLink(url: string): Promise<LinkHandlerResult> {
   }
 }
 
-function handleTodosProtocol(action: string, params: Record<string, string>): LinkHandlerResult {
+async function handleTodosProtocol(action: string, params: Record<string, string>): Promise<LinkHandlerResult> {
   if (action === "session") {
     const sessionId = Number.parseInt(params.sessionId, 10);
-    if (!Number.isNaN(sessionId)) {
-      window.dispatchEvent(new CustomEvent("todos:session", { detail: { sessionId } }));
+    if (Number.isNaN(sessionId)) {
+      return { success: false, error: `Invalid session ID: ${params.sessionId}` };
+    }
+
+    try {
+      // Focus the application window
+      const mainWindow = Window.getCurrent();
+      await mainWindow.setFocus();
+
+      // Continue/attach to the session (fetch last 4KB of output)
+      const result = await sessionClient.continueSession(sessionId, 4096);
+      console.log(`[deep-link] Continued session ${sessionId}:`, result.session);
+
       return { success: true };
+    } catch (error) {
+      return { success: false, error: `Failed to continue session ${sessionId}: ${error}` };
     }
   }
   return { success: false, error: `Unknown todos:// action: ${action}` };
