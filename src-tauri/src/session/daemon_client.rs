@@ -5,7 +5,7 @@ use super::config::Config;
 use super::protocol::{
     deserialize_message, serialize_message, DaemonNotification, DaemonRequest, DaemonResponse,
 };
-use crate::cli_paths::{find_daemon_binary, CliPaths};
+use crate::cli_paths::resolve_daemon_path;
 use anyhow::{Context, Result};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -22,17 +22,15 @@ fn connect_or_start_daemon(config: &Config) -> Result<UnixStream> {
     // Daemon not running, try to start it
     eprintln!("Daemon not running, attempting to start...");
 
-    // Find the daemon binary
-    let daemon_path = CliPaths::read()
-        .and_then(|paths| {
-            if paths.daemon_exists() {
-                Some(paths.daemon_path)
-            } else {
-                None
-            }
-        })
-        .or_else(find_daemon_binary)
-        .ok_or_else(|| anyhow::anyhow!("Could not find right-now-daemon binary"))?;
+    // Find the daemon binary using several strategies:
+    // 1. Next to current_exe() (typical for bundled releases)
+    // 2. CliPaths from app-written config
+    // 3. Platform-specific fallback locations
+    let daemon_path = resolve_daemon_path().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Could not find right-now-daemon binary. Please ensure Right Now is installed correctly."
+        )
+    })?;
 
     // Start the daemon as a detached background process
     Command::new(&daemon_path)
@@ -55,7 +53,8 @@ fn connect_or_start_daemon(config: &Config) -> Result<UnixStream> {
     }
 
     Err(anyhow::anyhow!(
-        "Daemon did not start within 2 seconds (socket not found)"
+        "Daemon did not start within 2 seconds (socket not found at: {})",
+        config.socket_path.display()
     ))
 }
 

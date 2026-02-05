@@ -64,6 +64,24 @@ function validateMacOSBundle(): Result {
     return { ok: false, error: `Failed to read Info.plist: ${err}` };
   }
 
+  // 5. Verify todo CLI can execute (quick sanity check)
+  const todoPath = join(macOSDir, "todo");
+  const todoResult = spawnSync(todoPath, ["help"], {
+    timeout: 5000,
+    encoding: "utf8",
+  });
+
+  if (todoResult.error) {
+    return { ok: false, error: `Failed to execute 'todo help': ${todoResult.error.message}` };
+  }
+
+  if (todoResult.status !== 0) {
+    return {
+      ok: false,
+      error: `'todo help' exited with code ${todoResult.status}\nstderr: ${todoResult.stderr}`,
+    };
+  }
+
   return { ok: true };
 }
 
@@ -111,6 +129,7 @@ function main() {
   console.log("   • Sidecars present: %s", REQUIRED_SIDECARS.join(", "));
   console.log("   • Test harness excluded: %s", FORBIDDEN_BINARIES.join(", "));
   console.log('   • Deep link scheme configured: "%s"', REQUIRED_URL_SCHEME);
+  console.log("   • CLI executable: 'todo help' runs successfully");
   console.log();
 }
 

@@ -490,6 +490,41 @@ pub fn find_daemon_binary() -> Option<PathBuf> {
     None
 }
 
+/// Resolve the `right-now-daemon` binary path for the current process.
+///
+/// Used by both the desktop app and the `todo` CLI.
+/// Resolution order:
+/// 1) Next to `current_exe()` (bundled app / cargo target dir)
+/// 2) cli-paths.json written by the app
+/// 3) Platform fallback locations (/Applications, etc)
+pub fn resolve_daemon_path() -> Option<PathBuf> {
+    let daemon_name = if cfg!(windows) {
+        "right-now-daemon.exe"
+    } else {
+        "right-now-daemon"
+    };
+
+    // 1) Next to current executable
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join(daemon_name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    // 2) From app-written config
+    if let Some(paths) = CliPaths::read() {
+        if paths.daemon_exists() {
+            return Some(paths.daemon_path);
+        }
+    }
+
+    // 3) Fallback locations
+    find_daemon_binary()
+}
+
 // ============================================================================
 // Tests
 // ============================================================================

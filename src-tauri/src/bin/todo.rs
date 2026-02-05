@@ -121,34 +121,41 @@ fn connect_to_daemon(config: &Config) -> Result<UnixStream> {
             // Daemon not running, try to start it
             println!("Daemon not running, attempting to start...");
 
-            // Find the daemon binary
-            // In production, this would be in the app bundle
-            // For development, use cargo run
-            let daemon_result = Command::new("cargo")
-                .args(["run", "--bin", "right-now-daemon"])
-                .current_dir(env!("CARGO_MANIFEST_DIR"))
-                .spawn();
+            // Find the daemon binary using several strategies:
+            // 1. Next to current_exe() (typical for bundled releases)
+            // 2. CliPaths from app-written config
+            // 3. Platform-specific fallback locations
+            let daemon_path = rn_desktop_2_lib::cli_paths::resolve_daemon_path().ok_or_else(|| {
+                anyhow!(
+                    "Could not find right-now-daemon binary. Please ensure Right Now is installed correctly."
+                )
+            })?;
 
-            match daemon_result {
-                Ok(_) => {
-                    // Wait for daemon to start
-                    for i in 0..50 {
-                        std::thread::sleep(Duration::from_millis(100));
-                        if let Ok(stream) = UnixStream::connect(&config.socket_path) {
-                            stream.set_read_timeout(Some(Duration::from_secs(30)))?;
-                            stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-                            return Ok(stream);
-                        }
-                        if i == 49 {
-                            anyhow::bail!("Timed out waiting for daemon to start");
-                        }
-                    }
-                    anyhow::bail!("Failed to connect after starting daemon");
+            // Start the daemon as a detached background process
+            Command::new(&daemon_path)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .with_context(|| format!("Failed to start daemon at {}", daemon_path.display()))?;
+
+            // Wait for daemon to start (check for socket)
+            for i in 0..50 {
+                std::thread::sleep(Duration::from_millis(100));
+                if let Ok(stream) = UnixStream::connect(&config.socket_path) {
+                    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+                    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+                    println!("Daemon started successfully");
+                    return Ok(stream);
                 }
-                Err(e) => {
-                    anyhow::bail!("Failed to start daemon: {}. Is the daemon binary built?", e);
+                if i == 49 {
+                    anyhow::bail!(
+                        "Timed out waiting for daemon to start. Socket not found at: {}",
+                        config.socket_path.display()
+                    );
                 }
             }
+            anyhow::bail!("Failed to connect after starting daemon");
         }
     }
 }

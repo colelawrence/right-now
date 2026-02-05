@@ -36,7 +36,17 @@ todo shell-integration --install
 ```
 This adds a prompt badge so your terminal shows the active session id and task.
 
+### Installing the CLI
+
+The `todo` command is bundled with the Right Now app. Install it via:
+
+1. **Tools Menu** (recommended): Open Right Now → **Tools → Install 'todo' CLI...**
+2. **Manual**: Copy `todo-shim` from the app bundle to `~/.local/bin/todo`
+
+The CLI uses a shim design that finds the real binary inside the app bundle, so it works even if you move or update the app.
+
 Learn more:
+- [CLI Installation Guide](./docs/cli-installation.md) — Installation, custom names, troubleshooting
 - [PTY session resumption plan](./PLAN_PTY_SESSION_RESUMPTION.md)
 - [Attention notifications](./docs/attention-notifications.md)
 
