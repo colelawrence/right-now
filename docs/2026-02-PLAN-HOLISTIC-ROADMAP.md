@@ -31,6 +31,8 @@
   - `br epic status`
   - `br ready -t task`
   - `br show <id>`
+- Two-way linking convention:
+  - Each bead should set `external_ref` to `2026-02-PLAN-HOLISTIC-ROADMAP.md#<bead-id>` (file name only; no `docs/` prefix).
 
 > Note on backward compatibility: this repo is internal/experimental; we do **not** need to preserve backwards compatibility for settings/state files or on-disk formats unless a task explicitly asks for it.
 
