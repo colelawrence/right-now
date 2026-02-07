@@ -21,6 +21,16 @@ static SESSION_BADGE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\s+\[(Running|Stopped|Waiting)\]\(todos://session/(\d+)\)$").unwrap()
 });
 
+/// Regex for extracting task ID token
+/// Matches: [abc.derived-label] (3-4 letter prefix + derived label)
+static TASK_ID_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\s+\[([a-z]{3,4}\.[a-z0-9\-]+)\](?:\s+\[(Running|Stopped|Waiting)\]\(todos://session/\d+\))?$").unwrap()
+});
+
+/// Regex for a bare task id key (no brackets), e.g. "abc.derived-label"
+static TASK_ID_KEY_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[a-z]{3,4}\.[a-z0-9\-]+$").unwrap());
+
 /// Session status parsed from a task line
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskSessionStatus {
@@ -35,8 +45,10 @@ pub struct ParsedTask {
     pub prefix: String,
     /// The checkbox state: "x", "X", or " " (or empty for unchecked)
     pub complete: Option<char>,
-    /// The task name without the session badge
+    /// The task name without the session badge or task ID
     pub name: String,
+    /// Task ID token if present (e.g., "abc.derived-label")
+    pub task_id: Option<String>,
     /// Session status if present
     pub session_status: Option<TaskSessionStatus>,
     /// The original full line (for round-tripping)
@@ -67,33 +79,45 @@ pub fn parse_task_line(line: &str) -> Option<ParsedTask> {
     let complete = checkbox.chars().next().filter(|c| *c != ' ');
     let full_name = caps.get(3).map(|m| m.as_str()).unwrap_or("");
 
-    // Extract session badge if present
-    let (name, session_status) = if let Some(badge_caps) = SESSION_BADGE_RE.captures(full_name) {
-        let status_str = badge_caps.get(1).map(|m| m.as_str()).unwrap_or("Running");
-        let session_id: SessionId = badge_caps
-            .get(2)
-            .and_then(|m| m.as_str().parse().ok())
-            .unwrap_or(0);
+    // Extract session badge if present (must be at the very end)
+    let (name_with_id, session_status) =
+        if let Some(badge_caps) = SESSION_BADGE_RE.captures(full_name) {
+            let status_str = badge_caps.get(1).map(|m| m.as_str()).unwrap_or("Running");
+            let session_id: SessionId = badge_caps
+                .get(2)
+                .and_then(|m| m.as_str().parse().ok())
+                .unwrap_or(0);
 
-        let status = match status_str {
-            "Running" => SessionStatus::Running,
-            "Waiting" => SessionStatus::Waiting,
-            "Stopped" => SessionStatus::Stopped,
-            _ => SessionStatus::Running,
+            let status = match status_str {
+                "Running" => SessionStatus::Running,
+                "Waiting" => SessionStatus::Waiting,
+                "Stopped" => SessionStatus::Stopped,
+                _ => SessionStatus::Running,
+            };
+
+            // Remove badge from name
+            let name = SESSION_BADGE_RE.replace(full_name, "").to_string();
+
+            (name, Some(TaskSessionStatus { status, session_id }))
+        } else {
+            (full_name.to_string(), None)
         };
 
-        // Remove badge from name
-        let name = SESSION_BADGE_RE.replace(full_name, "").to_string();
-
-        (name, Some(TaskSessionStatus { status, session_id }))
+    // Extract task ID token if present (appears after name, before badge)
+    let (name, task_id) = if let Some(id_caps) = TASK_ID_RE.captures(&name_with_id) {
+        let task_id_str = id_caps.get(1).map(|m| m.as_str().to_string());
+        // Remove task ID from name
+        let name = TASK_ID_RE.replace(&name_with_id, "").to_string();
+        (name, task_id_str)
     } else {
-        (full_name.to_string(), None)
+        (name_with_id, None)
     };
 
     Some(ParsedTask {
         prefix,
         complete,
         name,
+        task_id,
         session_status,
         original_line: line.to_string(),
     })
@@ -127,6 +151,7 @@ pub fn format_session_badge(status: SessionStatus, session_id: SessionId) -> Str
 }
 
 /// Update a task line with a new session status, or remove the badge if None
+/// Preserves task ID tokens in the correct order: name → task_id → badge
 pub fn update_task_session(line: &str, session_status: Option<&TaskSessionStatus>) -> String {
     let Some(task) = parse_task_line(line) else {
         return line.to_string();
@@ -138,12 +163,20 @@ pub fn update_task_session(line: &str, session_status: Option<&TaskSessionStatus
         None => " ".to_string(),
     };
 
+    let task_id_token = match &task.task_id {
+        Some(id) => format!(" [{}]", id),
+        None => String::new(),
+    };
+
     let badge = match session_status {
         Some(ss) => format_session_badge(ss.status, ss.session_id),
         None => String::new(),
     };
 
-    format!("{}[{}] {}{}", task.prefix, checkbox, task.name, badge)
+    format!(
+        "{}[{}] {}{}{}",
+        task.prefix, checkbox, task.name, task_id_token, badge
+    )
 }
 
 /// Parse a complete markdown body into blocks
@@ -188,14 +221,48 @@ pub fn parse_body(content: &str) -> Vec<MarkdownBlock> {
     blocks
 }
 
-/// Find a task in the markdown content by matching the start of the task name
+/// Find a task in the markdown content by task key.
+///
+/// Matching strategy:
+/// 1. If `task_key` looks like a task id (e.g. "abc.derived-label"), match by `task_id`
+/// 2. Otherwise prefer exact name match (case-insensitive)
+/// 3. Fallback to starts-with match (case-insensitive) for CLI convenience
 pub fn find_task_by_key<'a>(blocks: &'a [MarkdownBlock], task_key: &str) -> Option<&'a ParsedTask> {
+    if TASK_ID_KEY_RE.is_match(task_key) {
+        return find_task_by_id(blocks, task_key);
+    }
+
     let key_lower = task_key.to_lowercase();
 
+    // Prefer exact match on task name
+    for block in blocks {
+        if let MarkdownBlock::Task(task) = block {
+            if task.name.to_lowercase() == key_lower {
+                return Some(task);
+            }
+        }
+    }
+
+    // Fallback: starts-with match on task name (legacy behavior)
     for block in blocks {
         if let MarkdownBlock::Task(task) = block {
             if task.name.to_lowercase().starts_with(&key_lower) {
                 return Some(task);
+            }
+        }
+    }
+
+    None
+}
+
+/// Find a task in the markdown content by task ID
+pub fn find_task_by_id<'a>(blocks: &'a [MarkdownBlock], task_id: &str) -> Option<&'a ParsedTask> {
+    for block in blocks {
+        if let MarkdownBlock::Task(task) = block {
+            if let Some(ref id) = task.task_id {
+                if id == task_id {
+                    return Some(task);
+                }
             }
         }
     }
@@ -215,13 +282,16 @@ pub struct UpdateResult {
 /// Update a specific task's session badge in the markdown content
 /// Returns the updated content and whether the task was found
 ///
-/// Note: Uses exact matching on task name (case-insensitive) to avoid
-/// accidentally updating tasks that share a common prefix.
+/// Matching strategy:
+/// 1. If task_name contains a dot and matches task ID pattern, prefer task_id match
+/// 2. Otherwise, use exact match on task name (case-insensitive)
 pub fn update_task_session_in_content(
     content: &str,
     task_name: &str,
     session_status: Option<&TaskSessionStatus>,
 ) -> UpdateResult {
+    let is_task_id = TASK_ID_KEY_RE.is_match(task_name);
+
     let name_lower = task_name.to_lowercase();
     let lines: Vec<&str> = content.lines().collect();
     let mut task_found = false;
@@ -230,10 +300,20 @@ pub fn update_task_session_in_content(
         .into_iter()
         .map(|line| {
             if let Some(task) = parse_task_line(line) {
-                // Use exact match (case-insensitive) on task name
-                if task.name.to_lowercase() == name_lower {
-                    task_found = true;
-                    return update_task_session(line, session_status);
+                // Prefer task_id match if the input looks like a task ID
+                if is_task_id {
+                    if let Some(ref task_id) = task.task_id {
+                        if task_id == task_name {
+                            task_found = true;
+                            return update_task_session(line, session_status);
+                        }
+                    }
+                } else {
+                    // Fall back to exact name match (case-insensitive)
+                    if task.name.to_lowercase() == name_lower {
+                        task_found = true;
+                        return update_task_session(line, session_status);
+                    }
                 }
             }
             line.to_string()
@@ -397,6 +477,19 @@ Some unrecognized text"#;
         assert_eq!(task.name, "Build pipeline");
 
         assert!(find_task_by_key(&blocks, "nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_find_task_by_key_matches_task_id() {
+        let content = r#"# Tasks
+- [ ] Implement reports [abc.implement-reports]
+- [ ] Build pipeline [xyz.build-pipeline]
+"#;
+        let blocks = parse_body(content);
+
+        let task = find_task_by_key(&blocks, "xyz.build-pipeline").unwrap();
+        assert_eq!(task.name, "Build pipeline");
+        assert_eq!(task.task_id.as_deref(), Some("xyz.build-pipeline"));
     }
 
     #[test]
@@ -676,5 +769,310 @@ Some unrecognized text"#;
         let line = "- [ ] Task [Running](todos://session/0)";
         let task = parse_task_line(line).unwrap();
         assert_eq!(task.session_status.as_ref().unwrap().session_id, 0);
+    }
+
+    // ============================================================================
+    // Task ID token tests
+    // ============================================================================
+
+    #[test]
+    fn test_parse_task_with_task_id_only() {
+        let line = "- [ ] Implement reports [abc.derived-label]";
+        let task = parse_task_line(line).unwrap();
+
+        assert_eq!(task.prefix, "- ");
+        assert_eq!(task.complete, None);
+        assert_eq!(task.name, "Implement reports");
+        assert_eq!(task.task_id, Some("abc.derived-label".to_string()));
+        assert!(task.session_status.is_none());
+    }
+
+    #[test]
+    fn test_parse_task_with_task_id_and_badge() {
+        let line = "- [ ] Implement reports [abc.derived-label] [Running](todos://session/42)";
+        let task = parse_task_line(line).unwrap();
+
+        assert_eq!(task.name, "Implement reports");
+        assert_eq!(task.task_id, Some("abc.derived-label".to_string()));
+        assert!(task.session_status.is_some());
+
+        let ss = task.session_status.unwrap();
+        assert_eq!(ss.status, SessionStatus::Running);
+        assert_eq!(ss.session_id, 42);
+    }
+
+    #[test]
+    fn test_parse_task_id_with_four_letter_prefix() {
+        let line = "- [ ] Task [abcd.some-label]";
+        let task = parse_task_line(line).unwrap();
+
+        assert_eq!(task.name, "Task");
+        assert_eq!(task.task_id, Some("abcd.some-label".to_string()));
+    }
+
+    #[test]
+    fn test_parse_task_id_with_three_letter_prefix() {
+        let line = "- [ ] Task [xyz.label]";
+        let task = parse_task_line(line).unwrap();
+
+        assert_eq!(task.name, "Task");
+        assert_eq!(task.task_id, Some("xyz.label".to_string()));
+    }
+
+    #[test]
+    fn test_parse_task_id_with_numbers_in_label() {
+        let line = "- [ ] Task [abc.label-123]";
+        let task = parse_task_line(line).unwrap();
+
+        assert_eq!(task.name, "Task");
+        assert_eq!(task.task_id, Some("abc.label-123".to_string()));
+    }
+
+    #[test]
+    fn test_update_task_preserves_task_id() {
+        let line = "- [ ] Implement reports [abc.derived-label]";
+        let ss = TaskSessionStatus {
+            status: SessionStatus::Running,
+            session_id: 42,
+        };
+
+        let updated = update_task_session(line, Some(&ss));
+        assert_eq!(
+            updated,
+            "- [ ] Implement reports [abc.derived-label] [Running](todos://session/42)"
+        );
+    }
+
+    #[test]
+    fn test_update_task_preserves_task_id_when_changing_badge() {
+        let line = "- [ ] Task [abc.label] [Running](todos://session/1)";
+        let ss = TaskSessionStatus {
+            status: SessionStatus::Stopped,
+            session_id: 1,
+        };
+
+        let updated = update_task_session(line, Some(&ss));
+        assert_eq!(
+            updated,
+            "- [ ] Task [abc.label] [Stopped](todos://session/1)"
+        );
+    }
+
+    #[test]
+    fn test_update_task_preserves_task_id_when_removing_badge() {
+        let line = "- [ ] Task [abc.label] [Running](todos://session/1)";
+        let updated = update_task_session(line, None);
+        assert_eq!(updated, "- [ ] Task [abc.label]");
+    }
+
+    #[test]
+    fn test_update_task_adds_badge_preserves_task_id() {
+        let line = "- [ ] Task [abc.label]";
+        let ss = TaskSessionStatus {
+            status: SessionStatus::Waiting,
+            session_id: 99,
+        };
+
+        let updated = update_task_session(line, Some(&ss));
+        assert_eq!(
+            updated,
+            "- [ ] Task [abc.label] [Waiting](todos://session/99)"
+        );
+    }
+
+    #[test]
+    fn test_find_task_by_id() {
+        let content = r#"# Tasks
+- [ ] First task [abc.first-label]
+- [ ] Second task [xyz.second-label]
+- [ ] Third task
+"#;
+        let blocks = parse_body(content);
+
+        let task = find_task_by_id(&blocks, "abc.first-label").unwrap();
+        assert_eq!(task.name, "First task");
+
+        let task = find_task_by_id(&blocks, "xyz.second-label").unwrap();
+        assert_eq!(task.name, "Second task");
+
+        assert!(find_task_by_id(&blocks, "nonexistent.label").is_none());
+    }
+
+    #[test]
+    fn test_update_task_by_id_in_content() {
+        let content = r#"# Tasks
+- [ ] First task [abc.first-label]
+- [ ] Second task [xyz.second-label]
+- [ ] Third task
+"#;
+
+        let ss = TaskSessionStatus {
+            status: SessionStatus::Running,
+            session_id: 42,
+        };
+
+        // Update using task ID
+        let result = update_task_session_in_content(content, "abc.first-label", Some(&ss));
+
+        assert!(result.task_found, "Task should be found by ID");
+        assert!(
+            result
+                .content
+                .contains("First task [abc.first-label] [Running](todos://session/42)"),
+            "Should update task with ID. Got: {}",
+            result.content
+        );
+        assert!(
+            result
+                .content
+                .contains("- [ ] Second task [xyz.second-label]"),
+            "Should NOT update other tasks. Got: {}",
+            result.content
+        );
+        assert!(
+            result.content.contains("- [ ] Third task"),
+            "Should NOT update task without ID. Got: {}",
+            result.content
+        );
+    }
+
+    #[test]
+    fn test_update_task_by_name_when_no_id() {
+        let content = r#"# Tasks
+- [ ] First task
+- [ ] Second task
+"#;
+
+        let ss = TaskSessionStatus {
+            status: SessionStatus::Running,
+            session_id: 1,
+        };
+
+        // Update using exact task name
+        let result = update_task_session_in_content(content, "First task", Some(&ss));
+
+        assert!(result.task_found, "Task should be found by name");
+        assert!(
+            result
+                .content
+                .contains("First task [Running](todos://session/1)"),
+            "Should update task by name. Got: {}",
+            result.content
+        );
+        assert!(
+            result.content.contains("- [ ] Second task"),
+            "Should NOT update other task. Got: {}",
+            result.content
+        );
+    }
+
+    #[test]
+    fn test_task_id_not_confused_with_regular_brackets() {
+        let line = "- [ ] Fix array[index] access";
+        let task = parse_task_line(line).unwrap();
+
+        assert_eq!(task.name, "Fix array[index] access");
+        assert!(task.task_id.is_none());
+    }
+
+    #[test]
+    fn test_task_id_requires_dot_separator() {
+        let line = "- [ ] Task [abcdefgh]";
+        let task = parse_task_line(line).unwrap();
+
+        // Without dot, should not be recognized as task ID
+        assert_eq!(task.name, "Task [abcdefgh]");
+        assert!(task.task_id.is_none());
+    }
+
+    #[test]
+    fn test_task_id_prefix_length_constraint() {
+        // Too short (2 letters)
+        let line = "- [ ] Task [ab.label]";
+        let task = parse_task_line(line).unwrap();
+        assert!(task.task_id.is_none());
+
+        // Too long (5 letters)
+        let line = "- [ ] Task [abcde.label]";
+        let task = parse_task_line(line).unwrap();
+        assert!(task.task_id.is_none());
+    }
+
+    #[test]
+    fn test_multiple_tasks_same_name_different_ids() {
+        let content = r#"# Tasks
+- [ ] Build feature [abc.variant-a]
+- [ ] Build feature [xyz.variant-b]
+"#;
+
+        let ss = TaskSessionStatus {
+            status: SessionStatus::Running,
+            session_id: 1,
+        };
+
+        // Update by task ID should only affect the specific task
+        let result = update_task_session_in_content(content, "abc.variant-a", Some(&ss));
+
+        assert!(result.task_found);
+        assert!(
+            result
+                .content
+                .contains("Build feature [abc.variant-a] [Running](todos://session/1)"),
+            "Should update first task. Got: {}",
+            result.content
+        );
+        assert!(
+            result
+                .content
+                .contains("- [ ] Build feature [xyz.variant-b]"),
+            "Should NOT update second task with different ID. Got: {}",
+            result.content
+        );
+    }
+
+    #[test]
+    fn test_task_id_with_completed_task() {
+        let line = "- [x] Completed task [abc.done-label] [Stopped](todos://session/42)";
+        let task = parse_task_line(line).unwrap();
+
+        assert_eq!(task.complete, Some('x'));
+        assert_eq!(task.name, "Completed task");
+        assert_eq!(task.task_id, Some("abc.done-label".to_string()));
+        assert_eq!(
+            task.session_status.as_ref().unwrap().status,
+            SessionStatus::Stopped
+        );
+    }
+
+    #[test]
+    fn test_task_id_case_sensitivity() {
+        // Task IDs should be lowercase only
+        let line = "- [ ] Task [ABC.Label]";
+        let task = parse_task_line(line).unwrap();
+
+        // Uppercase should not match task ID pattern
+        assert!(task.task_id.is_none());
+        assert_eq!(task.name, "Task [ABC.Label]");
+    }
+
+    #[test]
+    fn test_ordering_task_id_between_name_and_badge() {
+        let line = "- [ ] Task name [abc.label] [Running](todos://session/1)";
+        let task = parse_task_line(line).unwrap();
+
+        assert_eq!(task.name, "Task name");
+        assert_eq!(task.task_id, Some("abc.label".to_string()));
+        assert!(task.session_status.is_some());
+
+        // Round-trip should preserve ordering
+        let ss = TaskSessionStatus {
+            status: SessionStatus::Waiting,
+            session_id: 1,
+        };
+        let updated = update_task_session(line, Some(&ss));
+        assert_eq!(
+            updated,
+            "- [ ] Task name [abc.label] [Waiting](todos://session/1)"
+        );
     }
 }

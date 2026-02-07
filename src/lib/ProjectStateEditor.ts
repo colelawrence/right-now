@@ -3,6 +3,13 @@ import matter from "gray-matter";
 const TASK_RE = /^(\s*[-\*]?\s*)\[([xX\s])\]\s+(.*)$/;
 
 /**
+ * Regex for extracting task ID token from task name.
+ * Matches: [abc.derived-label] (3-4 letter prefix + dot + kebab-case label)
+ * Must come before session badge if present
+ */
+const TASK_ID_RE = /\s+\[([a-z]{3,4})\.([a-z0-9-]+)\](?=\s+\[(?:Running|Stopped|Waiting)\]|$)/;
+
+/**
  * Regex for extracting session badge from task name.
  * Matches: [Status](todos://session/<id>) at end of line
  * Status can be: Running, Stopped, Waiting
@@ -23,27 +30,43 @@ export interface TaskSessionStatus {
 }
 
 /**
- * Extract session badge from task name, returning the clean name and session status
+ * Extract task ID token and session badge from task name
  */
-function extractSessionBadge(fullName: string): {
+function extractTaskMetadata(fullName: string): {
   name: string;
+  taskId: string | null;
   sessionStatus: TaskSessionStatus | null;
 } {
-  const match = fullName.match(SESSION_BADGE_RE);
-  if (!match) {
-    return { name: fullName, sessionStatus: null };
+  let name = fullName;
+  let taskId: string | null = null;
+  let sessionStatus: TaskSessionStatus | null = null;
+
+  // Extract session badge first (it's at the very end)
+  const sessionMatch = name.match(SESSION_BADGE_RE);
+  if (sessionMatch) {
+    const status = sessionMatch[1] as SessionStatus;
+    const sessionId = parseInt(sessionMatch[2], 10);
+    sessionStatus = { status, sessionId };
+    name = name.replace(SESSION_BADGE_RE, "");
   }
 
-  const status = match[1] as SessionStatus;
-  const sessionId = parseInt(match[2], 10);
+  // Extract task ID (comes before session badge, so we extract from the cleaned name)
+  const taskIdMatch = name.match(TASK_ID_RE);
+  if (taskIdMatch) {
+    const prefix = taskIdMatch[1];
+    const label = taskIdMatch[2];
+    taskId = `${prefix}.${label}`;
+    name = name.replace(TASK_ID_RE, "");
+  }
 
-  // Remove badge from name
-  const name = fullName.replace(SESSION_BADGE_RE, "");
+  return { name, taskId, sessionStatus };
+}
 
-  return {
-    name,
-    sessionStatus: { status, sessionId },
-  };
+/**
+ * Format a task ID token for insertion into a task line
+ */
+export function formatTaskId(taskId: string): string {
+  return ` [${taskId}]`;
 }
 
 /**
@@ -57,18 +80,20 @@ function parseTaskLine(line: string): {
   prefix: string;
   complete: string | false;
   name: string;
+  taskId: string | null;
   sessionStatus: TaskSessionStatus | null;
 } | null {
   const match = line.match(TASK_RE);
   if (!match) return null;
 
   const fullName = match[3];
-  const { name, sessionStatus } = extractSessionBadge(fullName);
+  const { name, taskId, sessionStatus } = extractTaskMetadata(fullName);
 
   return {
     prefix: match[1],
     complete: match[2].trim() || false,
     name,
+    taskId,
     sessionStatus,
   };
 }
@@ -79,7 +104,7 @@ function parseHeadingLine(line: string): { level: number; text: string } | null 
 }
 
 /**
- * Task block with optional session status
+ * Task block with optional task ID and session status
  */
 export interface TaskBlock {
   type: "task";
@@ -87,6 +112,7 @@ export interface TaskBlock {
   details: string | null;
   complete: string | false;
   prefix: string;
+  taskId: string | null;
   sessionStatus: TaskSessionStatus | null;
 }
 
@@ -109,6 +135,60 @@ export interface ProjectFile {
     endsAt?: number;
   };
   markdown: ProjectMarkdown[];
+}
+
+/**
+ * Generate a stable task ID from task name with collision avoidance
+ */
+export function generateTaskId(taskName: string, existingIds: Set<string>): string {
+  // Derive label from task name: lowercase, keep alphanumeric and hyphens
+  const rawLabel = taskName
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .substring(0, 40); // Keep it reasonably short
+
+  // Ensure label is non-empty and doesn't start/end with hyphens
+  const label = rawLabel.replace(/-+/g, "-").replace(/^-+|-+$/g, "") || "task";
+
+  // Generate 3-letter prefix
+  const chars = "abcdefghijklmnopqrstuvwxyz";
+
+  // Try 3-letter prefix first
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const prefix = Array.from({ length: 3 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+
+    const candidate = `${prefix}.${label}`;
+    if (!existingIds.has(candidate)) {
+      return candidate;
+    }
+  }
+
+  // Fallback to 4-letter prefix if 3-letter has too many collisions
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const prefix = Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+
+    const candidate = `${prefix}.${label}`;
+    if (!existingIds.has(candidate)) {
+      return candidate;
+    }
+  }
+
+  // Last resort: append random suffix to a 4-letter prefix
+  const prefix = Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+
+  return `${prefix}.${label}-${Date.now()}`;
+}
+
+/**
+ * Ensure a task has a stable ID, generating one if missing
+ */
+export function ensureTaskId(task: TaskBlock, existingIds: Set<string>): void {
+  if (!task.taskId) {
+    task.taskId = generateTaskId(task.name, existingIds);
+    existingIds.add(task.taskId);
+  }
 }
 
 export namespace ProjectStateEditor {
@@ -381,13 +461,15 @@ function stringifyProjectMarkdown(blocks: ProjectMarkdown[]): string {
           return `${hashes} ${block.text}`;
         }
         case "task": {
-          // Build the task line with optional session badge
+          // Build the task line with optional task ID and session badge
+          // Order: task name → task ID → session badge
           // Preserve the original prefix (indentation + bullet style) if available
           const prefix = block.prefix || "- ";
+          const taskIdToken = block.taskId ? formatTaskId(block.taskId) : "";
           const badge = block.sessionStatus
             ? formatSessionBadge(block.sessionStatus.status, block.sessionStatus.sessionId)
             : "";
-          const lines = [`${prefix}[${block.complete || " "}] ${block.name}${badge}`];
+          const lines = [`${prefix}[${block.complete || " "}] ${block.name}${taskIdToken}${badge}`];
           if (block.details) {
             lines.push(block.details);
           }
