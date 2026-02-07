@@ -6,12 +6,14 @@
 //! - Strict file permissions (0600 files, 0700 dirs)
 //! - Bounded startup cleanup of stale temp files
 //! - Availability flag with graceful degradation
+//! - Per-task flock coordination for safe concurrent access
 
 use std::fs;
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use fs2::FileExt;
 use sha2::{Digest, Sha256};
 
 use super::models::ContextSnapshotV1;
@@ -21,6 +23,12 @@ const CLEANUP_SCAN_LIMIT: usize = 1000;
 
 /// Age threshold for temp file cleanup (1 hour)
 const CLEANUP_AGE_THRESHOLD: Duration = Duration::from_secs(3600);
+
+/// Lock acquisition timeout (500ms per plan §1.3.3)
+const LOCK_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Default retention count: last N snapshots per task
+const DEFAULT_RETENTION_COUNT: usize = 5;
 
 /// Snapshot store for Context Resurrection
 ///
@@ -125,6 +133,50 @@ impl SnapshotStore {
             .join(format!("{}.json", snapshot_id))
     }
 
+    /// Get the path for the task lock file
+    fn lock_path(&self, project_path: &Path, task_id: &str) -> PathBuf {
+        self.task_dir(project_path, task_id).join(".lock")
+    }
+
+    /// Acquire an exclusive lock on a task directory
+    ///
+    /// Returns a locked file handle. The lock is released when the file is dropped.
+    /// Timeout is LOCK_TIMEOUT (500ms).
+    fn acquire_task_lock(&self, project_path: &Path, task_id: &str) -> io::Result<fs::File> {
+        let lock_path = self.lock_path(project_path, task_id);
+
+        // Ensure parent directory exists
+        if let Some(parent) = lock_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let lock_file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&lock_path)?;
+
+        // Try to acquire lock with timeout
+        let start = std::time::Instant::now();
+        loop {
+            match lock_file.try_lock_exclusive() {
+                Ok(()) => return Ok(lock_file),
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    if start.elapsed() >= LOCK_TIMEOUT {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            format!(
+                                "Failed to acquire task lock within {:?} for task {}",
+                                LOCK_TIMEOUT, task_id
+                            ),
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
     /// Ensure task directory exists with strict permissions
     fn ensure_task_dir(&self, project_path: &Path, task_id: &str) -> io::Result<PathBuf> {
         if !self.available {
@@ -154,6 +206,7 @@ impl SnapshotStore {
     ///
     /// Uses temp file + fsync + rename pattern to ensure readers never see partial writes.
     /// Files are created with 0600 permissions on Unix.
+    /// Acquires a per-task flock before writing to coordinate with pruning/deletion.
     pub fn write_snapshot(
         &self,
         project_path: &Path,
@@ -162,6 +215,9 @@ impl SnapshotStore {
     ) -> io::Result<PathBuf> {
         let task_dir = self.ensure_task_dir(project_path, task_id)?;
         let final_path = self.snapshot_path(project_path, task_id, &snapshot.id);
+
+        // Acquire task lock before writing (per §1.3.3)
+        let _lock = self.acquire_task_lock(project_path, task_id)?;
 
         // Write to temp file in same directory
         let temp_name = format!("{}.json.tmp.{}", snapshot.id, std::process::id());
@@ -381,6 +437,172 @@ impl SnapshotStore {
     ) -> io::Result<Option<ContextSnapshotV1>> {
         let snapshots = self.list_snapshots(project_path, task_id, Some(1))?;
         Ok(snapshots.into_iter().next())
+    }
+
+    /// Prune old snapshots for a specific task
+    ///
+    /// Retains the last N snapshots (default: 5) and deletes older ones.
+    /// Acquires a per-task flock before deleting to coordinate with capture.
+    ///
+    /// Returns the number of snapshots deleted.
+    pub fn prune_snapshots(
+        &self,
+        project_path: &Path,
+        task_id: &str,
+        retain_count: Option<usize>,
+    ) -> io::Result<usize> {
+        if !self.available {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "SnapshotStore is unavailable",
+            ));
+        }
+
+        let retain_count = retain_count.unwrap_or(DEFAULT_RETENTION_COUNT);
+
+        // Acquire task lock before pruning (per §1.3.2)
+        let _lock = self.acquire_task_lock(project_path, task_id)?;
+
+        // List all snapshots sorted by timestamp (newest first)
+        let snapshots = self.list_snapshots(project_path, task_id, None)?;
+
+        if snapshots.len() <= retain_count {
+            return Ok(0);
+        }
+
+        let mut deleted = 0;
+
+        // Delete snapshots beyond the retain count
+        for snapshot in snapshots.iter().skip(retain_count) {
+            let snapshot_path = self.snapshot_path(project_path, task_id, &snapshot.id);
+
+            match fs::remove_file(&snapshot_path) {
+                Ok(()) => {
+                    deleted += 1;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Failed to delete snapshot {}: {}",
+                        snapshot_path.display(),
+                        e
+                    );
+                }
+            }
+        }
+
+        Ok(deleted)
+    }
+
+    /// Delete all snapshots for a specific task
+    ///
+    /// Acquires a per-task flock before deleting to coordinate with capture.
+    /// Returns the number of snapshots deleted.
+    pub fn delete_task(&self, project_path: &Path, task_id: &str) -> io::Result<usize> {
+        if !self.available {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "SnapshotStore is unavailable",
+            ));
+        }
+
+        let task_dir = self.task_dir(project_path, task_id);
+        if !task_dir.exists() {
+            return Ok(0);
+        }
+
+        // Acquire task lock before deleting (per §1.3.2)
+        let _lock = self.acquire_task_lock(project_path, task_id)?;
+
+        let mut deleted = 0;
+
+        // Delete all .json snapshot files
+        for entry in fs::read_dir(&task_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if !path.is_file() {
+                continue;
+            }
+
+            if let Some(ext) = path.extension() {
+                if ext == "json" {
+                    match fs::remove_file(&path) {
+                        Ok(()) => deleted += 1,
+                        Err(e) => {
+                            eprintln!(
+                                "Warning: Failed to delete snapshot {}: {}",
+                                path.display(),
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // Drop the lock before removing the directory
+        drop(_lock);
+
+        // Remove the task directory itself (including lock file)
+        if let Err(e) = fs::remove_dir_all(&task_dir) {
+            eprintln!(
+                "Warning: Failed to remove task directory {}: {}",
+                task_dir.display(),
+                e
+            );
+        }
+
+        Ok(deleted)
+    }
+
+    /// Delete all snapshots for a specific project
+    ///
+    /// Iterates through all task directories and deletes them with proper locking.
+    /// Returns the total number of snapshots deleted.
+    pub fn delete_project(&self, project_path: &Path) -> io::Result<usize> {
+        if !self.available {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "SnapshotStore is unavailable",
+            ));
+        }
+
+        let project_dir = self.project_dir(project_path);
+        if !project_dir.exists() {
+            return Ok(0);
+        }
+
+        let mut total_deleted = 0;
+
+        // Find all task directories
+        let task_dirs: Vec<_> = fs::read_dir(&project_dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .collect();
+
+        // Delete each task with proper locking
+        for task_entry in task_dirs {
+            let task_dir_path = task_entry.path();
+            if let Some(task_id) = task_dir_path.file_name().and_then(|n| n.to_str()) {
+                match self.delete_task(project_path, task_id) {
+                    Ok(count) => total_deleted += count,
+                    Err(e) => {
+                        eprintln!("Warning: Failed to delete task {}: {}", task_id, e);
+                    }
+                }
+            }
+        }
+
+        // Remove the project directory itself
+        if let Err(e) = fs::remove_dir_all(&project_dir) {
+            eprintln!(
+                "Warning: Failed to remove project directory {}: {}",
+                project_dir.display(),
+                e
+            );
+        }
+
+        Ok(total_deleted)
     }
 }
 
@@ -847,5 +1069,357 @@ mod tests {
             .unwrap();
 
         assert_eq!(snapshots.len(), 0);
+    }
+
+    #[test]
+    fn test_prune_snapshots_retains_last_n() {
+        use super::super::models::{CaptureReason, ContextSnapshotV1};
+
+        let temp_dir = TempDir::new().unwrap();
+        let store = SnapshotStore::new(temp_dir.path());
+
+        let project_path = temp_dir.path().join("TODO.md");
+        fs::write(&project_path, "# TODO\n").unwrap();
+
+        // Create 7 snapshots
+        for i in 1..=7 {
+            let snapshot = ContextSnapshotV1::new(
+                format!("2026-02-06T10:{:02}:00Z_prn.prune-test", i),
+                project_path.to_string_lossy().to_string(),
+                "prn.prune-test".to_string(),
+                "Prune test task".to_string(),
+                format!("2026-02-06T10:{:02}:00Z", i),
+                CaptureReason::SessionStopped,
+            );
+            store
+                .write_snapshot(&project_path, "prn.prune-test", &snapshot)
+                .unwrap();
+        }
+
+        // Verify all 7 exist
+        let before = store
+            .list_snapshots(&project_path, "prn.prune-test", None)
+            .unwrap();
+        assert_eq!(before.len(), 7);
+
+        // Prune with default retention (5)
+        let deleted = store
+            .prune_snapshots(&project_path, "prn.prune-test", None)
+            .unwrap();
+
+        assert_eq!(deleted, 2, "Should delete 2 oldest snapshots");
+
+        // Verify only 5 remain
+        let after = store
+            .list_snapshots(&project_path, "prn.prune-test", None)
+            .unwrap();
+        assert_eq!(after.len(), 5);
+
+        // Verify the newest 5 remain (timestamps 10:03 through 10:07)
+        assert!(after[0].captured_at.contains("10:07:00"));
+        assert!(after[1].captured_at.contains("10:06:00"));
+        assert!(after[2].captured_at.contains("10:05:00"));
+        assert!(after[3].captured_at.contains("10:04:00"));
+        assert!(after[4].captured_at.contains("10:03:00"));
+    }
+
+    #[test]
+    fn test_prune_snapshots_custom_retention() {
+        use super::super::models::{CaptureReason, ContextSnapshotV1};
+
+        let temp_dir = TempDir::new().unwrap();
+        let store = SnapshotStore::new(temp_dir.path());
+
+        let project_path = temp_dir.path().join("TODO.md");
+        fs::write(&project_path, "# TODO\n").unwrap();
+
+        // Create 6 snapshots
+        for i in 1..=6 {
+            let snapshot = ContextSnapshotV1::new(
+                format!("2026-02-06T11:{:02}:00Z_cst.custom-test", i),
+                project_path.to_string_lossy().to_string(),
+                "cst.custom-test".to_string(),
+                "Custom retention test".to_string(),
+                format!("2026-02-06T11:{:02}:00Z", i),
+                CaptureReason::IdleTimeout,
+            );
+            store
+                .write_snapshot(&project_path, "cst.custom-test", &snapshot)
+                .unwrap();
+        }
+
+        // Prune with retention of 2
+        let deleted = store
+            .prune_snapshots(&project_path, "cst.custom-test", Some(2))
+            .unwrap();
+
+        assert_eq!(deleted, 4, "Should delete 4 oldest snapshots");
+
+        // Verify only 2 remain
+        let after = store
+            .list_snapshots(&project_path, "cst.custom-test", None)
+            .unwrap();
+        assert_eq!(after.len(), 2);
+        assert!(after[0].captured_at.contains("11:06:00"));
+        assert!(after[1].captured_at.contains("11:05:00"));
+    }
+
+    #[test]
+    fn test_prune_snapshots_no_deletion_when_under_limit() {
+        use super::super::models::{CaptureReason, ContextSnapshotV1};
+
+        let temp_dir = TempDir::new().unwrap();
+        let store = SnapshotStore::new(temp_dir.path());
+
+        let project_path = temp_dir.path().join("TODO.md");
+        fs::write(&project_path, "# TODO\n").unwrap();
+
+        // Create only 3 snapshots (under default retention of 5)
+        for i in 1..=3 {
+            let snapshot = ContextSnapshotV1::new(
+                format!("2026-02-06T12:{:02}:00Z_nop.no-prune", i),
+                project_path.to_string_lossy().to_string(),
+                "nop.no-prune".to_string(),
+                "No prune test".to_string(),
+                format!("2026-02-06T12:{:02}:00Z", i),
+                CaptureReason::Manual,
+            );
+            store
+                .write_snapshot(&project_path, "nop.no-prune", &snapshot)
+                .unwrap();
+        }
+
+        // Prune should delete nothing
+        let deleted = store
+            .prune_snapshots(&project_path, "nop.no-prune", None)
+            .unwrap();
+
+        assert_eq!(deleted, 0, "Should not delete any snapshots");
+
+        // Verify all 3 remain
+        let after = store
+            .list_snapshots(&project_path, "nop.no-prune", None)
+            .unwrap();
+        assert_eq!(after.len(), 3);
+    }
+
+    #[test]
+    fn test_delete_task() {
+        use super::super::models::{CaptureReason, ContextSnapshotV1};
+
+        let temp_dir = TempDir::new().unwrap();
+        let store = SnapshotStore::new(temp_dir.path());
+
+        let project_path = temp_dir.path().join("TODO.md");
+        fs::write(&project_path, "# TODO\n").unwrap();
+
+        // Create snapshots for two tasks
+        for i in 1..=3 {
+            let snapshot1 = ContextSnapshotV1::new(
+                format!("2026-02-06T13:{:02}:00Z_del.delete-test", i),
+                project_path.to_string_lossy().to_string(),
+                "del.delete-test".to_string(),
+                "Task to delete".to_string(),
+                format!("2026-02-06T13:{:02}:00Z", i),
+                CaptureReason::SessionWaiting,
+            );
+            store
+                .write_snapshot(&project_path, "del.delete-test", &snapshot1)
+                .unwrap();
+
+            let snapshot2 = ContextSnapshotV1::new(
+                format!("2026-02-06T13:{:02}:00Z_kep.keep-test", i),
+                project_path.to_string_lossy().to_string(),
+                "kep.keep-test".to_string(),
+                "Task to keep".to_string(),
+                format!("2026-02-06T13:{:02}:00Z", i),
+                CaptureReason::SessionWaiting,
+            );
+            store
+                .write_snapshot(&project_path, "kep.keep-test", &snapshot2)
+                .unwrap();
+        }
+
+        // Verify both tasks have 3 snapshots
+        assert_eq!(
+            store
+                .list_snapshots(&project_path, "del.delete-test", None)
+                .unwrap()
+                .len(),
+            3
+        );
+        assert_eq!(
+            store
+                .list_snapshots(&project_path, "kep.keep-test", None)
+                .unwrap()
+                .len(),
+            3
+        );
+
+        // Delete one task
+        let deleted = store.delete_task(&project_path, "del.delete-test").unwrap();
+
+        assert_eq!(deleted, 3, "Should delete all 3 snapshots");
+
+        // Verify deleted task has no snapshots
+        assert_eq!(
+            store
+                .list_snapshots(&project_path, "del.delete-test", None)
+                .unwrap()
+                .len(),
+            0
+        );
+
+        // Verify kept task still has 3 snapshots
+        assert_eq!(
+            store
+                .list_snapshots(&project_path, "kep.keep-test", None)
+                .unwrap()
+                .len(),
+            3
+        );
+
+        // Verify task directory was removed
+        let task_dir = store.task_dir(&project_path, "del.delete-test");
+        assert!(!task_dir.exists(), "Task directory should be removed");
+    }
+
+    #[test]
+    fn test_delete_task_nonexistent() {
+        let temp_dir = TempDir::new().unwrap();
+        let store = SnapshotStore::new(temp_dir.path());
+
+        let project_path = temp_dir.path().join("TODO.md");
+        fs::write(&project_path, "# TODO\n").unwrap();
+
+        // Delete a task that doesn't exist
+        let deleted = store.delete_task(&project_path, "nex.nonexistent").unwrap();
+
+        assert_eq!(deleted, 0, "Should delete 0 snapshots");
+    }
+
+    #[test]
+    fn test_delete_project() {
+        use super::super::models::{CaptureReason, ContextSnapshotV1};
+
+        let temp_dir = TempDir::new().unwrap();
+        let store = SnapshotStore::new(temp_dir.path());
+
+        let project_path = temp_dir.path().join("TODO.md");
+        fs::write(&project_path, "# TODO\n").unwrap();
+
+        // Create snapshots for 3 tasks
+        for task_num in 1..=3 {
+            let task_id = format!("tk{}.task-{}", task_num, task_num);
+            for snap_num in 1..=2 {
+                let snapshot = ContextSnapshotV1::new(
+                    format!(
+                        "2026-02-06T14:{:02}:00Z_{}",
+                        task_num * 10 + snap_num,
+                        task_id
+                    ),
+                    project_path.to_string_lossy().to_string(),
+                    task_id.clone(),
+                    format!("Task {}", task_num),
+                    format!("2026-02-06T14:{:02}:00Z", task_num * 10 + snap_num),
+                    CaptureReason::Manual,
+                );
+                store
+                    .write_snapshot(&project_path, &task_id, &snapshot)
+                    .unwrap();
+            }
+        }
+
+        // Verify we have 6 total snapshots (3 tasks × 2 snapshots)
+        let mut total = 0;
+        for task_num in 1..=3 {
+            let task_id = format!("tk{}.task-{}", task_num, task_num);
+            total += store
+                .list_snapshots(&project_path, &task_id, None)
+                .unwrap()
+                .len();
+        }
+        assert_eq!(total, 6);
+
+        // Delete the entire project
+        let deleted = store.delete_project(&project_path).unwrap();
+
+        assert_eq!(deleted, 6, "Should delete all 6 snapshots");
+
+        // Verify all tasks have no snapshots
+        for task_num in 1..=3 {
+            let task_id = format!("tk{}.task-{}", task_num, task_num);
+            assert_eq!(
+                store
+                    .list_snapshots(&project_path, &task_id, None)
+                    .unwrap()
+                    .len(),
+                0
+            );
+        }
+
+        // Verify project directory was removed
+        let project_dir = store.project_dir(&project_path);
+        assert!(!project_dir.exists(), "Project directory should be removed");
+    }
+
+    #[test]
+    fn test_delete_project_nonexistent() {
+        let temp_dir = TempDir::new().unwrap();
+        let store = SnapshotStore::new(temp_dir.path());
+
+        let project_path = temp_dir.path().join("nonexistent-TODO.md");
+
+        // Delete a project that doesn't exist
+        let deleted = store.delete_project(&project_path).unwrap();
+
+        assert_eq!(deleted, 0, "Should delete 0 snapshots");
+    }
+
+    #[test]
+    fn test_task_lock_coordination() {
+        use super::super::models::{CaptureReason, ContextSnapshotV1};
+
+        let temp_dir = TempDir::new().unwrap();
+        let store = SnapshotStore::new(temp_dir.path());
+
+        let project_path = temp_dir.path().join("TODO.md");
+        fs::write(&project_path, "# TODO\n").unwrap();
+
+        // Create a snapshot (which acquires lock during write)
+        let snapshot = ContextSnapshotV1::new(
+            "2026-02-06T15:00:00Z_lck.lock-test".to_string(),
+            project_path.to_string_lossy().to_string(),
+            "lck.lock-test".to_string(),
+            "Lock test task".to_string(),
+            "2026-02-06T15:00:00Z".to_string(),
+            CaptureReason::SessionStopped,
+        );
+
+        store
+            .write_snapshot(&project_path, "lck.lock-test", &snapshot)
+            .unwrap();
+
+        // Verify lock file was created
+        let lock_path = store.lock_path(&project_path, "lck.lock-test");
+        assert!(lock_path.exists(), "Lock file should exist");
+
+        // Prune (which also acquires lock) should succeed
+        let deleted = store
+            .prune_snapshots(&project_path, "lck.lock-test", None)
+            .unwrap();
+
+        assert_eq!(deleted, 0, "No snapshots to delete yet");
+
+        // Delete task (which also acquires lock) should succeed
+        let deleted = store.delete_task(&project_path, "lck.lock-test").unwrap();
+
+        assert_eq!(deleted, 1, "Should delete the one snapshot");
+
+        // Lock file should be removed with the task directory
+        assert!(
+            !lock_path.exists(),
+            "Lock file should be removed with task directory"
+        );
     }
 }

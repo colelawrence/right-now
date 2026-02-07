@@ -75,7 +75,6 @@ pub fn sanitize_terminal_output(input: &str) -> String {
 use crate::context_resurrection::models::{CaptureReason, ContextSnapshotV1, TerminalContext};
 use crate::context_resurrection::store::SnapshotStore;
 use std::collections::HashMap;
-use std::fs::File;
 use std::io;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -218,19 +217,8 @@ impl CaptureService {
             }
         }
 
-        // Acquire per-task lock with 500ms timeout
-        let lock_file = self.get_lock_file_path(project_path, task_id)?;
-        let _lock_guard = match acquire_task_lock(&lock_file, Duration::from_millis(500)) {
-            Ok(guard) => guard,
-            Err(e) => {
-                eprintln!(
-                    "Warning: Failed to acquire lock for task {} within 500ms: {}. Dropping capture.",
-                    task_id,
-                    e
-                );
-                return Ok(None);
-            }
-        };
+        // Note: Per-task flock coordination is now handled by store.write_snapshot()
+        // (removed redundant lock acquisition here to avoid deadlock)
 
         // Build snapshot
         let timestamp = format_timestamp(self.clock.now_utc());
@@ -272,9 +260,24 @@ impl CaptureService {
             snapshot.user_note = Some(note);
         }
 
-        // Write snapshot atomically
-        self.store
-            .write_snapshot(project_path, task_id, &snapshot)?;
+        // Write snapshot atomically (with per-task flock coordination)
+        match self.store.write_snapshot(project_path, task_id, &snapshot) {
+            Ok(_) => {
+                // Success - continue to record capture
+            }
+            Err(e) if e.kind() == io::ErrorKind::TimedOut => {
+                // Lock timeout - drop capture gracefully
+                eprintln!(
+                    "Warning: Failed to acquire lock for task {} within timeout: {}. Dropping capture.",
+                    task_id, e
+                );
+                return Ok(None);
+            }
+            Err(e) => {
+                // Other errors are propagated
+                return Err(e);
+            }
+        }
 
         // Record successful capture
         {
@@ -289,53 +292,6 @@ impl CaptureService {
         );
 
         Ok(Some(snapshot))
-    }
-
-    /// Get the lock file path for a task
-    fn get_lock_file_path(
-        &self,
-        project_path: &Path,
-        task_id: &str,
-    ) -> io::Result<std::path::PathBuf> {
-        let task_dir = self.store.task_dir_public(project_path, task_id);
-        std::fs::create_dir_all(&task_dir)?;
-        Ok(task_dir.join(".lock"))
-    }
-}
-
-/// Acquire a flock on the task lock file with timeout
-///
-/// Returns the file handle which holds the lock (lock is released on drop)
-fn acquire_task_lock(lock_path: &Path, timeout: Duration) -> io::Result<File> {
-    use fs2::FileExt;
-    use std::thread;
-
-    let start = Instant::now();
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .open(lock_path)?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-    }
-
-    loop {
-        match file.try_lock_exclusive() {
-            Ok(()) => return Ok(file),
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                if start.elapsed() >= timeout {
-                    return Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "Failed to acquire lock within timeout",
-                    ));
-                }
-                thread::sleep(Duration::from_millis(10));
-            }
-            Err(e) => return Err(e),
-        }
     }
 }
 
