@@ -3943,7 +3943,9 @@ dependencies = [
  "cocoa",
  "crossterm",
  "dirs 5.0.1",
+ "filetime",
  "fs2",
+ "hex",
  "libc",
  "objc",
  "once_cell",
@@ -3953,6 +3955,7 @@ dependencies = [
  "rodio",
  "serde",
  "serde_json",
+ "sha2",
  "signal-hook",
  "tauri",
  "tauri-build",
@@ -3969,6 +3972,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "walkdir",
 ]
 
 [[package]]

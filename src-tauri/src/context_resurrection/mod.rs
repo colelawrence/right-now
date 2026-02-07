@@ -11,3 +11,4 @@ pub mod store;
 // Re-export key types
 pub use capture::{SessionProvider, SessionSnapshot};
 pub use models::{CaptureReason, ContextSnapshotV1, SnapshotId};
+pub use store::SnapshotStore;
