@@ -538,6 +538,7 @@ async fn handle_request(
 
         DaemonRequest::Start {
             task_key,
+            task_id,
             project_path,
             shell,
         } => {
@@ -566,8 +567,9 @@ async fn handle_request(
                 }
             };
 
-            // Use the full task name as the key
+            // Use the full task name as the key, and extract task_id from markdown if not provided
             let full_task_name = task.name.clone();
+            let resolved_task_id = task_id.or_else(|| task.task_id.clone());
 
             let mut registry = state.registry.write().await;
 
@@ -583,7 +585,12 @@ async fn handle_request(
 
             // Allocate new session
             let id = registry.allocate_id();
-            let mut session = Session::new(id, full_task_name.clone(), project_path.clone());
+            let mut session = Session::new(
+                id,
+                full_task_name.clone(),
+                resolved_task_id,
+                project_path.clone(),
+            );
             session.status = SessionStatus::Running;
             session.exit_code = None;
 
@@ -1137,6 +1144,7 @@ mod tests {
             let mut session = Session::new(
                 0,
                 "Build feature".to_string(),
+                None,
                 markdown_path.to_string_lossy().to_string(),
             );
             session.status = SessionStatus::Running;

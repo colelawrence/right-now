@@ -1,0 +1,101 @@
+[
+  {
+    "name": "First task",
+    "complete": false,
+    "taskId": "abc.first-task",
+    "sessionStatus": null
+  },
+  {
+    "name": "Second task",
+    "complete": false,
+    "taskId": "xyz.second-task-123",
+    "sessionStatus": null
+  },
+  {
+    "name": "Long prefix task",
+    "complete": false,
+    "taskId": "abcd.long-prefix-task",
+    "sessionStatus": null
+  },
+  {
+    "name": "Completed task",
+    "complete": true,
+    "taskId": "wxyz.completed-task",
+    "sessionStatus": null
+  },
+  {
+    "name": "Running task",
+    "complete": false,
+    "taskId": "def.running-task",
+    "sessionStatus": {
+      "status": "Running",
+      "sessionId": 42
+    }
+  },
+  {
+    "name": "Stopped task",
+    "complete": false,
+    "taskId": "ghi.stopped-task",
+    "sessionStatus": {
+      "status": "Stopped",
+      "sessionId": 99
+    }
+  },
+  {
+    "name": "Waiting task",
+    "complete": false,
+    "taskId": "jkl.waiting-task",
+    "sessionStatus": {
+      "status": "Waiting",
+      "sessionId": 123
+    }
+  },
+  {
+    "name": "Badge only running",
+    "complete": false,
+    "taskId": null,
+    "sessionStatus": {
+      "status": "Running",
+      "sessionId": 1
+    }
+  },
+  {
+    "name": "Badge only stopped",
+    "complete": false,
+    "taskId": null,
+    "sessionStatus": {
+      "status": "Stopped",
+      "sessionId": 2
+    }
+  },
+  {
+    "name": "Hyphenated name",
+    "complete": false,
+    "taskId": "mno.multi-word-label",
+    "sessionStatus": null
+  },
+  {
+    "name": "Numbers included",
+    "complete": false,
+    "taskId": "pqr.label-with-123",
+    "sessionStatus": null
+  },
+  {
+    "name": "Complex label",
+    "complete": false,
+    "taskId": "stu.some-complex-label-456",
+    "sessionStatus": null
+  },
+  {
+    "name": "Plain task one",
+    "complete": false,
+    "taskId": null,
+    "sessionStatus": null
+  },
+  {
+    "name": "Plain completed task",
+    "complete": true,
+    "taskId": null,
+    "sessionStatus": null
+  }
+]

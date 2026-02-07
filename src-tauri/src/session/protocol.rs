@@ -79,6 +79,10 @@ pub struct Session {
     pub id: SessionId,
     /// Task key/name from the TODO file that this session is associated with
     pub task_key: String,
+    /// Stable task ID from TODO.md (e.g., "abc.derived-label") if available
+    /// Allows CR to join session snapshots even after task name changes
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
     /// Absolute path to the TODO.md file
     pub project_path: String,
     /// Current status of the session
@@ -102,11 +106,17 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(id: SessionId, task_key: String, project_path: String) -> Self {
+    pub fn new(
+        id: SessionId,
+        task_key: String,
+        task_id: Option<String>,
+        project_path: String,
+    ) -> Self {
         let now = Utc::now();
         Self {
             id,
             task_key,
+            task_id,
             project_path,
             status: SessionStatus::Running,
             pty_pid: None,
@@ -135,6 +145,9 @@ pub enum DaemonRequest {
     Start {
         /// Task name/key to match in the TODO file
         task_key: String,
+        /// Stable task ID (e.g., "abc.derived-label") if available from TODO.md
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
         /// Path to the TODO.md file
         project_path: String,
         /// Optional shell command to run (defaults to $SHELL)
@@ -311,6 +324,7 @@ mod tests {
     fn test_request_serialization() {
         let req = DaemonRequest::Start {
             task_key: "Implement reports".to_string(),
+            task_id: Some("abc.implement-reports".to_string()),
             project_path: "/path/TODO.md".to_string(),
             shell: Some(vec![
                 "/bin/zsh".to_string(),
@@ -324,11 +338,13 @@ mod tests {
 
         if let DaemonRequest::Start {
             task_key,
+            task_id,
             project_path,
             shell,
         } = parsed
         {
             assert_eq!(task_key, "Implement reports");
+            assert_eq!(task_id, Some("abc.implement-reports".to_string()));
             assert_eq!(project_path, "/path/TODO.md");
             assert_eq!(
                 shell,
@@ -345,7 +361,13 @@ mod tests {
 
     #[test]
     fn test_session_deep_link() {
-        let session = Session::new(42, "Test task".to_string(), "/test/TODO.md".to_string());
+        let session = Session::new(
+            42,
+            "Test task".to_string(),
+            Some("abc.test-task".to_string()),
+            "/test/TODO.md".to_string(),
+        );
         assert_eq!(session.deep_link(), "todos://session/42");
+        assert_eq!(session.task_id, Some("abc.test-task".to_string()));
     }
 }

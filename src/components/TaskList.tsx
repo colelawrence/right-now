@@ -153,7 +153,7 @@ function TaskRow({ task, onCompleteTask, sessionClient, projectFullPath }: TaskR
     setActionError(null);
     setIsActing(true);
     try {
-      await sessionClient.startSession(task.name, projectFullPath);
+      await sessionClient.startSession(task.name, projectFullPath, task.taskId ?? undefined);
       // Session badge will be added by daemon; file watcher will reload
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

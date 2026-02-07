@@ -222,6 +222,7 @@ fn session_list(project_path: Option<String>) -> Result<Vec<session::protocol::S
 #[tauri::command]
 fn session_start(
     task_key: String,
+    task_id: Option<String>,
     project_path: String,
     shell: Option<Vec<String>>,
 ) -> Result<session::protocol::Session, String> {
@@ -230,6 +231,7 @@ fn session_start(
 
     let request = DaemonRequest::Start {
         task_key,
+        task_id,
         project_path,
         shell,
     };

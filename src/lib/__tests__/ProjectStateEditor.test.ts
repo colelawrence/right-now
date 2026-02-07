@@ -1798,4 +1798,46 @@ pomodoro_settings:
       });
     });
   });
+
+  // Cross-language parity test (bd-q85.4)
+  describe("cross-language parity with Rust parser", () => {
+    it("should match Rust parser results for shared fixture", async () => {
+      // Read the shared fixture and expected JSON
+      const fixturePath = new URL("../../../test/fixtures/task-id-parsing.md", import.meta.url);
+      const expectedPath = new URL("../../../test/fixtures/task-id-parsing.expected.json", import.meta.url);
+
+      const fixtureContent = await Bun.file(fixturePath).text();
+      const expectedTasks = JSON.parse(await Bun.file(expectedPath).text());
+
+      // Parse with TypeScript parser
+      const parsed = ProjectStateEditor.parse(fixtureContent);
+      const tasks = parsed.markdown.filter((m) => m.type === "task") as TaskBlock[];
+
+      // Convert to simplified format matching expected JSON
+      const simplifiedTasks = tasks.map((task) => ({
+        name: task.name,
+        complete: task.complete !== false,
+        taskId: task.taskId,
+        sessionStatus: task.sessionStatus,
+      }));
+
+      // Compare with expected results
+      expect(simplifiedTasks.length).toBe(expectedTasks.length);
+
+      simplifiedTasks.forEach((actual, index) => {
+        const expected = expectedTasks[index];
+        expect(actual.name).toBe(expected.name);
+        expect(actual.complete).toBe(expected.complete);
+        expect(actual.taskId).toBe(expected.taskId);
+
+        if (expected.sessionStatus === null) {
+          expect(actual.sessionStatus).toBe(null);
+        } else {
+          expect(actual.sessionStatus).not.toBe(null);
+          expect(actual.sessionStatus?.status).toBe(expected.sessionStatus.status);
+          expect(actual.sessionStatus?.sessionId).toBe(expected.sessionStatus.sessionId);
+        }
+      });
+    });
+  });
 });

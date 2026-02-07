@@ -1075,4 +1075,101 @@ Some unrecognized text"#;
             "- [ ] Task name [abc.label] [Waiting](todos://session/1)"
         );
     }
+
+    // Cross-language parity test (bd-q85.4)
+    #[test]
+    fn test_cross_language_parity_with_typescript_parser() {
+        use serde::Deserialize;
+
+        #[derive(Debug, Deserialize)]
+        struct ExpectedTask {
+            name: String,
+            complete: bool,
+            #[serde(rename = "taskId")]
+            task_id: Option<String>,
+            #[serde(rename = "sessionStatus")]
+            session_status: Option<ExpectedSessionStatus>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct ExpectedSessionStatus {
+            status: String,
+            #[serde(rename = "sessionId")]
+            session_id: u64,
+        }
+
+        // Read the shared fixture
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let fixture_path = format!("{}/../test/fixtures/task-id-parsing.md", manifest_dir);
+        let expected_path = format!(
+            "{}/../test/fixtures/task-id-parsing.expected.json",
+            manifest_dir
+        );
+
+        let fixture_content =
+            std::fs::read_to_string(&fixture_path).expect("Failed to read fixture file");
+        let expected_json =
+            std::fs::read_to_string(&expected_path).expect("Failed to read expected JSON file");
+
+        let expected_tasks: Vec<ExpectedTask> =
+            serde_json::from_str(&expected_json).expect("Failed to parse expected JSON");
+
+        // Parse with Rust parser
+        let blocks = parse_body(&fixture_content);
+        let tasks: Vec<&ParsedTask> = blocks
+            .iter()
+            .filter_map(|b| {
+                if let MarkdownBlock::Task(task) = b {
+                    Some(task)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Compare with expected results
+        assert_eq!(
+            tasks.len(),
+            expected_tasks.len(),
+            "Number of tasks should match"
+        );
+
+        for (i, (actual, expected)) in tasks.iter().zip(expected_tasks.iter()).enumerate() {
+            assert_eq!(actual.name, expected.name, "Task {} name should match", i);
+
+            let actual_complete = actual.complete.is_some();
+            assert_eq!(
+                actual_complete, expected.complete,
+                "Task {} complete status should match",
+                i
+            );
+
+            assert_eq!(
+                actual.task_id, expected.task_id,
+                "Task {} task_id should match",
+                i
+            );
+
+            match (&actual.session_status, &expected.session_status) {
+                (None, None) => {}
+                (Some(actual_ss), Some(expected_ss)) => {
+                    let actual_status = format!("{}", actual_ss.status);
+                    assert_eq!(
+                        actual_status, expected_ss.status,
+                        "Task {} session status should match",
+                        i
+                    );
+                    assert_eq!(
+                        actual_ss.session_id, expected_ss.session_id,
+                        "Task {} session_id should match",
+                        i
+                    );
+                }
+                _ => panic!(
+                    "Task {} session_status presence mismatch: actual={:?}, expected={:?}",
+                    i, actual.session_status, expected.session_status
+                ),
+            }
+        }
+    }
 }

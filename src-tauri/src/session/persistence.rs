@@ -188,7 +188,12 @@ mod tests {
         let mut registry = SessionRegistry::default();
 
         let id = registry.allocate_id();
-        let mut session = Session::new(id, "Test task".to_string(), "/test/TODO.md".to_string());
+        let mut session = Session::new(
+            id,
+            "Test task".to_string(),
+            Some("abc.test-task".to_string()),
+            "/test/TODO.md".to_string(),
+        );
         session.status = SessionStatus::Running;
         registry.insert(session);
 
@@ -200,6 +205,7 @@ mod tests {
 
         let loaded_session = loaded.get(id).unwrap();
         assert_eq!(loaded_session.task_key, "Test task");
+        assert_eq!(loaded_session.task_id, Some("abc.test-task".to_string()));
         assert_eq!(loaded_session.status, SessionStatus::Running);
     }
 
@@ -211,6 +217,7 @@ mod tests {
         registry.insert(Session::new(
             id1,
             "Implement reports".to_string(),
+            Some("abc.implement-reports".to_string()),
             "/test/TODO.md".to_string(),
         ));
 
@@ -218,6 +225,7 @@ mod tests {
         registry.insert(Session::new(
             id2,
             "Build pipeline".to_string(),
+            Some("xyz.build-pipeline".to_string()),
             "/test/TODO.md".to_string(),
         ));
 
@@ -249,6 +257,7 @@ mod tests {
         registry.insert(Session::new(
             id1,
             "Build feature".to_string(),
+            Some("abc.build-feature".to_string()),
             "/test/TODO.md".to_string(),
         ));
 
@@ -256,6 +265,7 @@ mod tests {
         registry.insert(Session::new(
             id2,
             "Build feature - backend".to_string(),
+            Some("xyz.build-feature-backend".to_string()),
             "/test/TODO.md".to_string(),
         ));
 
@@ -278,5 +288,44 @@ mod tests {
 
         let contents = fs::read_to_string(&path).unwrap();
         assert_eq!(contents, "# Test\n- [ ] Task\n");
+    }
+
+    #[test]
+    fn test_task_id_roundtrip() {
+        let (config, _temp) = test_config();
+        let mut registry = SessionRegistry::default();
+
+        // Test with task_id present
+        let id1 = registry.allocate_id();
+        let session_with_id = Session::new(
+            id1,
+            "Task with ID".to_string(),
+            Some("abc.task-with-id".to_string()),
+            "/test/TODO.md".to_string(),
+        );
+        registry.insert(session_with_id);
+
+        // Test with task_id absent
+        let id2 = registry.allocate_id();
+        let session_without_id = Session::new(
+            id2,
+            "Task without ID".to_string(),
+            None,
+            "/test/TODO.md".to_string(),
+        );
+        registry.insert(session_without_id);
+
+        // Save and reload
+        registry.save(&config).unwrap();
+        let loaded = SessionRegistry::load(&config).unwrap();
+
+        // Verify task_id persisted correctly
+        let loaded1 = loaded.get(id1).unwrap();
+        assert_eq!(loaded1.task_id, Some("abc.task-with-id".to_string()));
+        assert_eq!(loaded1.task_key, "Task with ID");
+
+        let loaded2 = loaded.get(id2).unwrap();
+        assert_eq!(loaded2.task_id, None);
+        assert_eq!(loaded2.task_key, "Task without ID");
     }
 }

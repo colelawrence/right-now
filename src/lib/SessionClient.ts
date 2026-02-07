@@ -38,6 +38,7 @@ export interface AttentionSummary {
 export interface Session {
   id: number;
   task_key: string;
+  task_id?: string; // Stable task ID from TODO.md (e.g., "abc.derived-label")
   project_path: string;
   status: SessionStatus;
   pty_pid?: number;
@@ -78,10 +79,11 @@ export class SessionClient {
   /**
    * Start a new session for a task
    */
-  async startSession(taskKey: string, projectPath: string, shell?: string[]): Promise<Session> {
+  async startSession(taskKey: string, projectPath: string, taskId?: string, shell?: string[]): Promise<Session> {
     try {
       const session = await invoke<Session>("session_start", {
         taskKey,
+        taskId: taskId ?? null,
         projectPath,
         shell: shell ?? null,
       });

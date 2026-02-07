@@ -276,6 +276,18 @@ fn main() -> Result<()> {
             let project_path = project
                 .ok_or_else(|| anyhow::anyhow!("No TODO.md found. Use --project to specify."))?;
 
+            // Parse TODO.md to extract task_id if present
+            let task_id = {
+                use rn_desktop_2_lib::session::markdown::{find_task_by_key, parse_body};
+                match std::fs::read_to_string(&project_path) {
+                    Ok(content) => {
+                        let blocks = parse_body(&content);
+                        find_task_by_key(&blocks, &task_key).and_then(|task| task.task_id.clone())
+                    }
+                    Err(_) => None, // File read error; daemon will catch it
+                }
+            };
+
             let mut stream = connect_to_daemon(&config)?;
 
             let shell = shell_cmd.map(|cmd| {
@@ -285,6 +297,7 @@ fn main() -> Result<()> {
 
             let request = DaemonRequest::Start {
                 task_key: task_key.clone(),
+                task_id,
                 project_path: project_path.to_string_lossy().to_string(),
                 shell,
             };

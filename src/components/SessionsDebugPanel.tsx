@@ -35,7 +35,7 @@ export function SessionsDebugPanel() {
     setLoading(true);
     setError(null);
     try {
-      await sessionClient.startSession(taskKey.trim(), projectPath.trim());
+      await sessionClient.startSession(taskKey.trim(), projectPath.trim(), undefined);
       setTaskKey("");
       await loadSessions();
     } catch (err) {
