@@ -114,6 +114,11 @@ impl SnapshotStore {
         self.project_dir(project_path).join(task_id)
     }
 
+    /// Public accessor for task directory (used by CaptureService for lock files)
+    pub fn task_dir_public(&self, project_path: &Path, task_id: &str) -> PathBuf {
+        self.task_dir(project_path, task_id)
+    }
+
     /// Get the path for a snapshot JSON file
     fn snapshot_path(&self, project_path: &Path, task_id: &str, snapshot_id: &str) -> PathBuf {
         self.task_dir(project_path, task_id)
