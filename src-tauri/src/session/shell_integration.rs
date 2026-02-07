@@ -111,7 +111,7 @@ PROMPT='$(_right_now_prompt)'$PROMPT
 _right_now_precmd() {
   if [[ -n "$RIGHT_NOW_SESSION_ID" ]]; then
     local _rn_task="${RIGHT_NOW_TASK_DISPLAY:-$RIGHT_NOW_TASK_KEY}"
-    print -Pn '\e]0;#%s: %s\a' "$RIGHT_NOW_SESSION_ID" "$_rn_task"
+    printf '\033]0;#%s: %s\007' "$RIGHT_NOW_SESSION_ID" "$_rn_task"
   fi
 }
 precmd_functions+=(_right_now_precmd)

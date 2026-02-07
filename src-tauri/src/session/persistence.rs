@@ -175,7 +175,8 @@ mod tests {
     fn test_config() -> (Config, TempDir) {
         let temp_dir = TempDir::new().unwrap();
         let config = Config {
-            data_dir: temp_dir.path().to_path_buf(),
+            runtime_dir: temp_dir.path().to_path_buf(),
+            state_dir: temp_dir.path().to_path_buf(),
             socket_path: temp_dir.path().join("daemon.sock"),
             pid_file: temp_dir.path().join("daemon.pid"),
         };

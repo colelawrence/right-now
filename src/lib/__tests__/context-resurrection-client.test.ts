@@ -45,8 +45,8 @@ describe("CrClient", () => {
     ]);
   });
 
-  it("latest(): maps 'No snapshots found' error to Ok(null)", async () => {
-    const { transport } = mockTransport(() => ({ type: "error", message: "No snapshots found" }));
+  it("latest(): maps not_found error code to Ok(null)", async () => {
+    const { transport } = mockTransport(() => ({ type: "error", code: "not_found", message: "No snapshots found" }));
     const client = new CrClient(transport);
 
     const result = await client.latest("/tmp/TODO.md", "abc.test-task");
@@ -74,16 +74,24 @@ describe("CrClient", () => {
     });
   });
 
-  it("get(): maps not-found errors to Ok(null)", async () => {
-    const { transport } = mockTransport(() => ({ type: "error", message: "Failed to read snapshot: not found" }));
+  it("get(): maps not_found error code to Ok(null)", async () => {
+    const { transport } = mockTransport(() => ({
+      type: "error",
+      code: "not_found",
+      message: "Failed to read snapshot: not found",
+    }));
     const client = new CrClient(transport);
 
     const result = await client.get("/tmp/TODO.md", "abc.test-task", "snap-1");
     expect(result).toEqual({ ok: true, value: null });
   });
 
-  it("captureNow(): maps skipped errors to Ok(null)", async () => {
-    const { transport } = mockTransport(() => ({ type: "error", message: "Capture was skipped (dedup/rate-limit)" }));
+  it("captureNow(): maps skipped error code to Ok(null)", async () => {
+    const { transport } = mockTransport(() => ({
+      type: "error",
+      code: "skipped",
+      message: "Capture was skipped (dedup/rate-limit)",
+    }));
     const client = new CrClient(transport);
 
     const result = await client.captureNow("/tmp/TODO.md", "abc.test-task", "hello");

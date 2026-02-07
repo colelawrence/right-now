@@ -60,23 +60,80 @@ fn connect_or_start_daemon(config: &Config) -> Result<UnixStream> {
 
 /// Send a request to the daemon and receive a response
 /// Handles notification messages that may arrive before the response
+///
+/// For CR requests, transport failures (connect/timeout) return Ok(DaemonResponse::Error)
+/// to enable structured error handling in the TypeScript layer.
 pub fn send_request(request: DaemonRequest) -> Result<DaemonResponse> {
+    use super::protocol::DaemonErrorCode;
+
     let config = Config::from_env();
 
+    // Check if this is a CR request (needs structured error handling)
+    let is_cr_request = matches!(
+        request,
+        DaemonRequest::CrLatest { .. }
+            | DaemonRequest::CrList { .. }
+            | DaemonRequest::CrGet { .. }
+            | DaemonRequest::CrCaptureNow { .. }
+            | DaemonRequest::CrDeleteTask { .. }
+            | DaemonRequest::CrDeleteProject { .. }
+    );
+
     // Connect to daemon (or start it)
-    let mut stream = connect_or_start_daemon(&config)?;
+    let mut stream = match connect_or_start_daemon(&config) {
+        Ok(s) => s,
+        Err(e) if is_cr_request => {
+            // For CR requests, return structured error instead of propagating
+            return Ok(DaemonResponse::Error {
+                code: DaemonErrorCode::DaemonUnavailable,
+                message: format!("Failed to connect to daemon: {}", e),
+            });
+        }
+        Err(e) => return Err(e),
+    };
 
     // Set read timeout to avoid hanging forever
-    stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .context("Failed to set read timeout")?;
+    if let Err(e) = stream.set_read_timeout(Some(Duration::from_secs(10))) {
+        if is_cr_request {
+            return Ok(DaemonResponse::Error {
+                code: DaemonErrorCode::Internal,
+                message: format!("Failed to set read timeout: {}", e),
+            });
+        }
+        return Err(e.into());
+    }
 
     // Send the request
-    let request_bytes = serialize_message(&request).context("Failed to serialize request")?;
-    stream
-        .write_all(&request_bytes)
-        .context("Failed to send request to daemon")?;
-    stream.flush().context("Failed to flush stream")?;
+    let request_bytes = match serialize_message(&request) {
+        Ok(b) => b,
+        Err(e) if is_cr_request => {
+            return Ok(DaemonResponse::Error {
+                code: DaemonErrorCode::InvalidRequest,
+                message: format!("Failed to serialize request: {}", e),
+            });
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    if let Err(e) = stream.write_all(&request_bytes) {
+        if is_cr_request {
+            return Ok(DaemonResponse::Error {
+                code: DaemonErrorCode::DaemonUnavailable,
+                message: format!("Failed to send request to daemon: {}", e),
+            });
+        }
+        return Err(e.into());
+    }
+
+    if let Err(e) = stream.flush() {
+        if is_cr_request {
+            return Ok(DaemonResponse::Error {
+                code: DaemonErrorCode::DaemonUnavailable,
+                message: format!("Failed to flush stream: {}", e),
+            });
+        }
+        return Err(e.into());
+    }
 
     // Read response, skipping any notification messages
     let mut reader = BufReader::new(stream);
@@ -84,12 +141,33 @@ pub fn send_request(request: DaemonRequest) -> Result<DaemonResponse> {
 
     loop {
         line.clear();
-        reader
-            .read_line(&mut line)
-            .context("Failed to read response from daemon")?;
-
-        if line.is_empty() {
-            return Err(anyhow::anyhow!("Daemon closed connection unexpectedly"));
+        match reader.read_line(&mut line) {
+            Ok(0) => {
+                if is_cr_request {
+                    return Ok(DaemonResponse::Error {
+                        code: DaemonErrorCode::DaemonUnavailable,
+                        message: "Daemon closed connection unexpectedly".to_string(),
+                    });
+                }
+                return Err(anyhow::anyhow!("Daemon closed connection unexpectedly"));
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                if is_cr_request {
+                    return Ok(DaemonResponse::Error {
+                        code: DaemonErrorCode::Timeout,
+                        message: "Daemon read timeout".to_string(),
+                    });
+                }
+                return Err(e.into());
+            }
+            Err(e) if is_cr_request => {
+                return Ok(DaemonResponse::Error {
+                    code: DaemonErrorCode::DaemonUnavailable,
+                    message: format!("Failed to read response from daemon: {}", e),
+                });
+            }
+            Err(e) => return Err(e.into()),
         }
 
         // Try to parse as notification first (we ignore these for now)
@@ -101,6 +179,12 @@ pub fn send_request(request: DaemonRequest) -> Result<DaemonResponse> {
         // Try to parse as response
         match deserialize_message::<DaemonResponse>(line.as_bytes()) {
             Ok(response) => return Ok(response),
+            Err(e) if is_cr_request => {
+                return Ok(DaemonResponse::Error {
+                    code: DaemonErrorCode::Internal,
+                    message: format!("Failed to parse daemon response: {}", e),
+                });
+            }
             Err(e) => {
                 return Err(anyhow::anyhow!(
                     "Failed to parse daemon response: {} (line: {})",
@@ -117,7 +201,7 @@ pub fn response_to_result<T, F>(response: DaemonResponse, extract: F) -> Result<
 where
     F: FnOnce(DaemonResponse) -> Option<T>,
 {
-    if let DaemonResponse::Error { message } = response {
+    if let DaemonResponse::Error { code: _, message } = response {
         return Err(message);
     }
 

@@ -246,6 +246,26 @@ pub enum DaemonRequest {
 // Daemon -> Client responses
 // ============================================================================
 
+/// Structured error codes for daemon responses
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DaemonErrorCode {
+    /// Resource not found (e.g., snapshot, session)
+    NotFound,
+    /// Operation skipped (e.g., dedup, rate-limit)
+    Skipped,
+    /// Invalid request parameters
+    InvalidRequest,
+    /// Store/persistence unavailable
+    StoreUnavailable,
+    /// Internal daemon error
+    Internal,
+    /// Daemon unavailable (transport failure)
+    DaemonUnavailable,
+    /// Request timeout
+    Timeout,
+}
+
 /// Response message from daemon to CLI/UI
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -293,8 +313,11 @@ pub enum DaemonResponse {
     CrSnapshots { snapshots: Vec<serde_json::Value> },
     /// Context Resurrection deletion result
     CrDeleted { deleted_count: usize },
-    /// Error response
-    Error { message: String },
+    /// Error response with structured code
+    Error {
+        code: DaemonErrorCode,
+        message: String,
+    },
 }
 
 // ============================================================================

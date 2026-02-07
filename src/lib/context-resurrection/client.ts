@@ -1,15 +1,26 @@
-import { type ContextSnapshotV1, type CrDaemonRequest, type CrDaemonResponse, type CrError, CrResult } from "./types";
+import {
+  type ContextSnapshotV1,
+  type CrDaemonRequest,
+  type CrDaemonResponse,
+  type CrError,
+  CrResult,
+  type DaemonErrorCode,
+} from "./types";
 
 export type CrTransport = (request: CrDaemonRequest) => Promise<CrDaemonResponse>;
 
-function errorFromDaemonMessage(message: string): CrError {
-  const m = message.toLowerCase();
-  if (m.includes("no snapshots found")) return { type: "not_found", message };
-  if (m.includes("not found")) return { type: "not_found", message };
-  if (m.includes("skipped") || m.includes("dedup") || m.includes("rate-limit")) {
-    return { type: "skipped", message };
+function errorFromDaemonResponse(code: DaemonErrorCode, message: string): CrError {
+  switch (code) {
+    case "not_found":
+      return { type: "not_found", message };
+    case "skipped":
+      return { type: "skipped", message };
+    case "daemon_unavailable":
+    case "timeout":
+      return { type: "daemon_unavailable", message };
+    default:
+      return { type: "daemon_error", message };
   }
-  return { type: "daemon_error", message };
 }
 
 export class CrClient {
@@ -28,7 +39,7 @@ export class CrClient {
       }
 
       if (res.type === "error") {
-        const err = errorFromDaemonMessage(res.message);
+        const err = errorFromDaemonResponse(res.code, res.message);
         // For latest(), not_found and skipped are not exceptional: treat as "no snapshot".
         if (err.type === "not_found") return CrResult.ok(null);
         return CrResult.err(err);
@@ -57,7 +68,7 @@ export class CrClient {
 
       if (res.type === "cr_snapshots") return CrResult.ok(res.snapshots);
 
-      if (res.type === "error") return CrResult.err(errorFromDaemonMessage(res.message));
+      if (res.type === "error") return CrResult.err(errorFromDaemonResponse(res.code, res.message));
 
       return CrResult.err({
         type: "daemon_error",
@@ -83,7 +94,7 @@ export class CrClient {
       if (res.type === "cr_snapshot") return CrResult.ok(res.snapshot);
 
       if (res.type === "error") {
-        const err = errorFromDaemonMessage(res.message);
+        const err = errorFromDaemonResponse(res.code, res.message);
         if (err.type === "not_found") return CrResult.ok(null);
         return CrResult.err(err);
       }
@@ -116,7 +127,7 @@ export class CrClient {
       if (res.type === "cr_snapshot") return CrResult.ok(res.snapshot);
 
       if (res.type === "error") {
-        const err = errorFromDaemonMessage(res.message);
+        const err = errorFromDaemonResponse(res.code, res.message);
         // For captureNow(), treat skipped as success with no snapshot.
         if (err.type === "skipped") return CrResult.ok(null);
         return CrResult.err(err);
@@ -144,7 +155,7 @@ export class CrClient {
 
       if (res.type === "cr_deleted") return CrResult.ok(res.deleted_count);
 
-      if (res.type === "error") return CrResult.err(errorFromDaemonMessage(res.message));
+      if (res.type === "error") return CrResult.err(errorFromDaemonResponse(res.code, res.message));
 
       return CrResult.err({
         type: "daemon_error",
@@ -167,7 +178,7 @@ export class CrClient {
 
       if (res.type === "cr_deleted") return CrResult.ok(res.deleted_count);
 
-      if (res.type === "error") return CrResult.err(errorFromDaemonMessage(res.message));
+      if (res.type === "error") return CrResult.err(errorFromDaemonResponse(res.code, res.message));
 
       return CrResult.err({
         type: "daemon_error",

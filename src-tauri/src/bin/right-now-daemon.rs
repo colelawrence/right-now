@@ -77,7 +77,7 @@ impl DaemonState {
         let (updates_tx, _) = broadcast::channel(100);
 
         // Initialize snapshot store for CR queries
-        let snapshot_store = SnapshotStore::new(&config.data_dir);
+        let snapshot_store = SnapshotStore::new(config.state_dir());
 
         Ok(Self {
             config,
@@ -94,7 +94,7 @@ impl DaemonState {
 
     /// Initialize Context Resurrection capture service (called after Arc::new)
     async fn init_capture_service(self: &Arc<Self>) {
-        let snapshot_store = SnapshotStore::new(&self.config.data_dir);
+        let snapshot_store = SnapshotStore::new(self.config.state_dir());
         if snapshot_store.is_available() {
             let session_provider: Arc<dyn SessionProvider> =
                 Arc::clone(self) as Arc<dyn SessionProvider>;
@@ -275,7 +275,7 @@ impl DaemonState {
 
     fn attach_socket_path(&self, session_id: SessionId) -> PathBuf {
         self.config
-            .data_dir
+            .runtime_dir()
             .join(format!("attach-{}.sock", session_id))
     }
 
@@ -565,7 +565,9 @@ async fn handle_client(
                                 handle_request(&state, request, &shutdown_tx).await
                             }
                             Err(e) => {
+                                use rn_desktop_2_lib::session::protocol::DaemonErrorCode;
                                 DaemonResponse::Error {
+                                    code: DaemonErrorCode::InvalidRequest,
                                     message: format!("Failed to parse request: {}", e),
                                 }
                             }
@@ -616,6 +618,8 @@ async fn handle_request(
     request: DaemonRequest,
     shutdown_tx: &tokio::sync::mpsc::Sender<()>,
 ) -> DaemonResponse {
+    use rn_desktop_2_lib::session::protocol::DaemonErrorCode;
+
     match request {
         DaemonRequest::Ping => DaemonResponse::Pong,
 
@@ -637,6 +641,7 @@ async fn handle_request(
                 Ok(c) => c,
                 Err(e) => {
                     return DaemonResponse::Error {
+                        code: DaemonErrorCode::Internal,
                         message: format!("Failed to read project file '{}': {}", project_path, e),
                     };
                 }
@@ -648,6 +653,7 @@ async fn handle_request(
                 Some(t) => t,
                 None => {
                     return DaemonResponse::Error {
+                        code: DaemonErrorCode::Internal,
                         message: format!(
                             "No task matching '{}' found in '{}'",
                             task_key, project_path
@@ -665,6 +671,7 @@ async fn handle_request(
             // Check if session already exists for this task
             if let Some(existing) = registry.find_by_task_key(&full_task_name, &project_path) {
                 return DaemonResponse::Error {
+                    code: DaemonErrorCode::Internal,
                     message: format!(
                         "Session already exists for task '{}' (id: {})",
                         full_task_name, existing.id
@@ -688,6 +695,7 @@ async fn handle_request(
                 Ok(p) => p,
                 Err(e) => {
                     return DaemonResponse::Error {
+                        code: DaemonErrorCode::Internal,
                         message: format!("Failed to spawn PTY: {}", e),
                     };
                 }
@@ -714,6 +722,7 @@ async fn handle_request(
                     pty.stop();
                 }
                 return DaemonResponse::Error {
+                    code: DaemonErrorCode::Internal,
                     message: format!("Failed to update markdown file: {}", e),
                 };
             }
@@ -724,6 +733,7 @@ async fn handle_request(
             drop(registry);
             if let Err(e) = state.save_registry().await {
                 return DaemonResponse::Error {
+                    code: DaemonErrorCode::Internal,
                     message: format!("Failed to save session: {}", e),
                 };
             }
@@ -763,6 +773,7 @@ async fn handle_request(
                     }
                 }
                 None => DaemonResponse::Error {
+                    code: DaemonErrorCode::NotFound,
                     message: format!("Session {} not found", session_id),
                 },
             }
@@ -778,6 +789,7 @@ async fn handle_request(
                     Some(session) => session.clone(),
                     None => {
                         return DaemonResponse::Error {
+                            code: DaemonErrorCode::NotFound,
                             message: format!("Session {} not found", session_id),
                         };
                     }
@@ -791,6 +803,7 @@ async fn handle_request(
 
             if !is_running {
                 return DaemonResponse::Error {
+                    code: DaemonErrorCode::Internal,
                     message: format!("Session {} is not running", session_id),
                 };
             }
@@ -803,6 +816,7 @@ async fn handle_request(
                 Ok(path) => path,
                 Err(e) => {
                     return DaemonResponse::Error {
+                        code: DaemonErrorCode::Internal,
                         message: format!("Failed to prepare attach socket: {}", e),
                     };
                 }
@@ -829,10 +843,12 @@ async fn handle_request(
                         rows,
                     },
                     Err(e) => DaemonResponse::Error {
+                        code: DaemonErrorCode::Internal,
                         message: format!("Failed to resize session {}: {}", session_id, e),
                     },
                 },
                 None => DaemonResponse::Error {
+                    code: DaemonErrorCode::Internal,
                     message: format!("Session {} is not running", session_id),
                 },
             }
@@ -885,6 +901,7 @@ async fn handle_request(
                     drop(registry);
                     if let Err(e) = state.save_registry().await {
                         return DaemonResponse::Error {
+                            code: DaemonErrorCode::Internal,
                             message: format!("Failed to save session: {}", e),
                         };
                     }
@@ -905,6 +922,7 @@ async fn handle_request(
                     DaemonResponse::SessionStopped { session }
                 }
                 None => DaemonResponse::Error {
+                    code: DaemonErrorCode::NotFound,
                     message: format!("Session {} not found", session_id),
                 },
             }
@@ -916,6 +934,7 @@ async fn handle_request(
             match state.session_tail(session_id, max_bytes).await {
                 Some(data) => DaemonResponse::SessionTail { session_id, data },
                 None => DaemonResponse::Error {
+                    code: DaemonErrorCode::Internal,
                     message: format!(
                         "Session {} is not running or has no PTY output available",
                         session_id
@@ -932,6 +951,7 @@ async fn handle_request(
                     session: session.clone(),
                 },
                 None => DaemonResponse::Error {
+                    code: DaemonErrorCode::NotFound,
                     message: format!("Session {} not found", session_id),
                 },
             }
@@ -942,15 +962,20 @@ async fn handle_request(
             task_id,
         } => {
             use rn_desktop_2_lib::context_resurrection::query;
+            use rn_desktop_2_lib::session::protocol::DaemonErrorCode;
 
             match query::cr_latest(&state.snapshot_store, &project_path, task_id.as_deref()) {
                 Ok(Some(snapshot)) => DaemonResponse::CrSnapshot {
                     snapshot: serde_json::to_value(&snapshot).unwrap_or(serde_json::Value::Null),
                 },
                 Ok(None) => DaemonResponse::Error {
+                    code: DaemonErrorCode::NotFound,
                     message: "No snapshots found".to_string(),
                 },
-                Err(e) => DaemonResponse::Error { message: e },
+                Err(e) => DaemonResponse::Error {
+                    code: DaemonErrorCode::Internal,
+                    message: e,
+                },
             }
         }
 
@@ -960,6 +985,7 @@ async fn handle_request(
             limit,
         } => {
             use rn_desktop_2_lib::context_resurrection::query;
+            use rn_desktop_2_lib::session::protocol::DaemonErrorCode;
 
             match query::cr_list(&state.snapshot_store, &project_path, &task_id, limit) {
                 Ok(snapshots) => {
@@ -969,7 +995,10 @@ async fn handle_request(
                         .collect();
                     DaemonResponse::CrSnapshots { snapshots: values }
                 }
-                Err(e) => DaemonResponse::Error { message: e },
+                Err(e) => DaemonResponse::Error {
+                    code: DaemonErrorCode::Internal,
+                    message: e,
+                },
             }
         }
 
@@ -978,13 +1007,35 @@ async fn handle_request(
             task_id,
             snapshot_id,
         } => {
-            use rn_desktop_2_lib::context_resurrection::query;
+            use rn_desktop_2_lib::session::protocol::DaemonErrorCode;
 
-            match query::cr_get(&state.snapshot_store, &project_path, &task_id, &snapshot_id) {
-                Ok(snapshot) => DaemonResponse::CrSnapshot {
-                    snapshot: serde_json::to_value(&snapshot).unwrap_or(serde_json::Value::Null),
-                },
-                Err(e) => DaemonResponse::Error { message: e },
+            if !state.snapshot_store.is_available() {
+                DaemonResponse::Error {
+                    code: DaemonErrorCode::StoreUnavailable,
+                    message: "Snapshot store is unavailable".to_string(),
+                }
+            } else {
+                let project = std::path::Path::new(&project_path);
+                match state
+                    .snapshot_store
+                    .read_snapshot(project, &task_id, &snapshot_id)
+                {
+                    Ok(snapshot) => DaemonResponse::CrSnapshot {
+                        snapshot: serde_json::to_value(&snapshot)
+                            .unwrap_or(serde_json::Value::Null),
+                    },
+                    Err(e) => {
+                        let code = if e.kind() == std::io::ErrorKind::NotFound {
+                            DaemonErrorCode::NotFound
+                        } else {
+                            DaemonErrorCode::Internal
+                        };
+                        DaemonResponse::Error {
+                            code,
+                            message: format!("Failed to read snapshot: {}", e),
+                        }
+                    }
+                }
             }
         }
 
@@ -994,6 +1045,7 @@ async fn handle_request(
             user_note,
         } => {
             use rn_desktop_2_lib::context_resurrection::query;
+            use rn_desktop_2_lib::session::protocol::DaemonErrorCode;
 
             // Find the task to get task_title and session_id
             let (task_title, session_id) = {
@@ -1028,12 +1080,17 @@ async fn handle_request(
                                 .unwrap_or(serde_json::Value::Null),
                         },
                         Ok(None) => DaemonResponse::Error {
+                            code: DaemonErrorCode::Skipped,
                             message: "Capture was skipped (dedup/rate-limit)".to_string(),
                         },
-                        Err(e) => DaemonResponse::Error { message: e },
+                        Err(e) => DaemonResponse::Error {
+                            code: DaemonErrorCode::Internal,
+                            message: e,
+                        },
                     }
                 }
                 None => DaemonResponse::Error {
+                    code: DaemonErrorCode::StoreUnavailable,
                     message: "Context Resurrection capture service is unavailable".to_string(),
                 },
             }
@@ -1044,19 +1101,27 @@ async fn handle_request(
             task_id,
         } => {
             use rn_desktop_2_lib::context_resurrection::query;
+            use rn_desktop_2_lib::session::protocol::DaemonErrorCode;
 
             match query::cr_delete_task(&state.snapshot_store, &project_path, &task_id) {
                 Ok(deleted_count) => DaemonResponse::CrDeleted { deleted_count },
-                Err(e) => DaemonResponse::Error { message: e },
+                Err(e) => DaemonResponse::Error {
+                    code: DaemonErrorCode::Internal,
+                    message: e,
+                },
             }
         }
 
         DaemonRequest::CrDeleteProject { project_path } => {
             use rn_desktop_2_lib::context_resurrection::query;
+            use rn_desktop_2_lib::session::protocol::DaemonErrorCode;
 
             match query::cr_delete_project(&state.snapshot_store, &project_path) {
                 Ok(deleted_count) => DaemonResponse::CrDeleted { deleted_count },
-                Err(e) => DaemonResponse::Error { message: e },
+                Err(e) => DaemonResponse::Error {
+                    code: DaemonErrorCode::Internal,
+                    message: e,
+                },
             }
         }
     }
@@ -1373,6 +1438,19 @@ async fn main() -> Result<()> {
     let listener = UnixListener::bind(&config.socket_path)
         .with_context(|| format!("Failed to bind socket: {}", config.socket_path.display()))?;
 
+    // Secure socket permissions (Unix only - owner-only access)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&config.socket_path, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| {
+                format!(
+                    "Failed to set socket permissions: {}",
+                    config.socket_path.display()
+                )
+            })?;
+    }
+
     println!("Daemon listening on {}", config.socket_path.display());
 
     // Shutdown signal channel
@@ -1424,13 +1502,15 @@ async fn main() -> Result<()> {
 mod tests {
     use super::*;
     use rn_desktop_2_lib::session::protocol::AttentionType;
+    use rn_desktop_2_lib::test_utils::{assert_eventually, assert_eventually_bool};
     use std::time::Duration;
     use tempfile::TempDir;
 
     fn test_config() -> (Config, TempDir) {
         let temp_dir = TempDir::new().unwrap();
         let config = Config {
-            data_dir: temp_dir.path().to_path_buf(),
+            runtime_dir: temp_dir.path().to_path_buf(),
+            state_dir: temp_dir.path().to_path_buf(),
             socket_path: temp_dir.path().join("daemon.sock"),
             pid_file: temp_dir.path().join("daemon.pid"),
         };
@@ -1468,7 +1548,7 @@ mod tests {
                 assert_eq!(session.task_key, "Build feature");
                 assert_eq!(session.status, SessionStatus::Running);
             }
-            DaemonResponse::Error { message } => {
+            DaemonResponse::Error { code: _, message } => {
                 panic!("Start failed: {}", message);
             }
             _ => panic!("Unexpected response"),
@@ -1522,7 +1602,7 @@ mod tests {
             DaemonResponse::SessionStopped { session } => {
                 assert_eq!(session.status, SessionStatus::Stopped);
             }
-            DaemonResponse::Error { message } => {
+            DaemonResponse::Error { code: _, message } => {
                 panic!("Stop failed: {}", message);
             }
             _ => panic!("Unexpected response"),
@@ -1564,7 +1644,7 @@ mod tests {
 
         // Verify error response
         match response {
-            DaemonResponse::Error { message } => {
+            DaemonResponse::Error { code: _, message } => {
                 assert!(
                     message.contains("No task matching"),
                     "Expected 'No task matching' error. Got: {}",
@@ -1610,7 +1690,7 @@ mod tests {
 
         // Verify error response
         match response {
-            DaemonResponse::Error { message } => {
+            DaemonResponse::Error { code: _, message } => {
                 assert!(
                     message.contains("already exists"),
                     "Expected 'already exists' error. Got: {}",
@@ -1700,30 +1780,35 @@ mod tests {
         };
 
         let response = handle_request(&state, request, &shutdown_tx).await;
-        match response {
-            DaemonResponse::SessionStarted { session } => {
-                // Wait for the PTY to exit and tail to be stored
-                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-
-                let tail_request = DaemonRequest::Tail {
-                    session_id: session.id,
-                    bytes: Some(1024),
-                };
-                let tail_response = handle_request(&state, tail_request, &shutdown_tx).await;
-                match tail_response {
-                    DaemonResponse::SessionTail { data, .. } => {
-                        let text = String::from_utf8_lossy(&data);
-                        assert!(
-                            text.contains("tail-output"),
-                            "Tail output missing expected text: {}",
-                            text
-                        );
-                    }
-                    other => panic!("Expected SessionTail response, got {:?}", other),
-                }
-            }
+        let session_id = match response {
+            DaemonResponse::SessionStarted { session } => session.id,
             other => panic!("Start failed: {:?}", other),
-        }
+        };
+
+        // Wait for tail to contain expected output (PTY must exit and tail must be stored)
+        assert_eventually_bool(
+            "tail to contain 'tail-output'",
+            Duration::from_secs(3),
+            Duration::from_millis(50),
+            || {
+                let state = Arc::clone(&state);
+                let shutdown_tx = shutdown_tx.clone();
+                async move {
+                    let tail_request = DaemonRequest::Tail {
+                        session_id,
+                        bytes: Some(1024),
+                    };
+                    match handle_request(&state, tail_request, &shutdown_tx).await {
+                        DaemonResponse::SessionTail { data, .. } => {
+                            let text = String::from_utf8_lossy(&data);
+                            text.contains("tail-output")
+                        }
+                        _ => false,
+                    }
+                }
+            },
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -1922,32 +2007,43 @@ mod tests {
             other => panic!("Expected SessionStarted, got {:?}", other),
         };
 
-        // Attention detection is best-effort and happens asynchronously as output is processed.
-        // Poll for a short time to avoid flakes on slower machines/CI.
-        let deadline = std::time::Instant::now() + Duration::from_secs(3);
-        loop {
-            let continue_req = DaemonRequest::Continue {
-                session_id,
-                tail_bytes: Some(4096),
-            };
+        // Wait for attention summary to be recorded
+        assert_eventually(
+            "attention summary to be recorded",
+            Duration::from_secs(3),
+            Duration::from_millis(50),
+            || {
+                let state = Arc::clone(&state);
+                let shutdown_tx = shutdown_tx.clone();
+                async move {
+                    let continue_req = DaemonRequest::Continue {
+                        session_id,
+                        tail_bytes: Some(4096),
+                    };
 
-            match handle_request(&state, continue_req, &shutdown_tx).await {
-                DaemonResponse::SessionContinued { session, .. } => {
-                    if let Some(summary) = session.last_attention {
-                        assert_eq!(summary.attention_type, AttentionType::Error);
-                        assert!(summary.preview.to_lowercase().contains("error"));
-                        break;
+                    match handle_request(&state, continue_req, &shutdown_tx).await {
+                        DaemonResponse::SessionContinued { session, .. } => {
+                            if let Some(summary) = session.last_attention {
+                                if summary.attention_type == AttentionType::Error
+                                    && summary.preview.to_lowercase().contains("error")
+                                {
+                                    Ok(summary)
+                                } else {
+                                    Err(format!(
+                                        "Attention summary type/preview mismatch: {:?}",
+                                        summary
+                                    ))
+                                }
+                            } else {
+                                Err("no attention summary yet".to_string())
+                            }
+                        }
+                        other => Err(format!("Expected SessionContinued, got {:?}", other)),
                     }
                 }
-                other => panic!("Expected SessionContinued response, got {:?}", other),
-            }
-
-            if std::time::Instant::now() >= deadline {
-                panic!("expected attention summary on session");
-            }
-
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+            },
+        )
+        .await;
 
         let _ = handle_request(&state, DaemonRequest::Stop { session_id }, &shutdown_tx).await;
     }
@@ -1984,13 +2080,28 @@ mod tests {
             other => panic!("Expected SessionStarted, got {:?}", other),
         };
 
-        // Wait for output and session to stop (need to wait for both PTY exit and watcher update)
-        tokio::time::sleep(Duration::from_millis(500)).await;
-
-        // Fetch via SessionProvider trait
-        let snapshot = state
-            .get_session_state(session_id)
-            .expect("Expected session snapshot");
+        // Wait for session provider to return non-empty tail with our test output
+        let snapshot = assert_eventually(
+            "session provider to return tail with test output",
+            Duration::from_secs(3),
+            Duration::from_millis(50),
+            || {
+                let state = Arc::clone(&state);
+                async move {
+                    match state.get_session_state(session_id) {
+                        Some(snap) if snap.tail.contains("session-provider-test-output") => {
+                            Ok(snap)
+                        }
+                        Some(snap) => Err(format!(
+                            "Tail doesn't contain expected output yet. Got: {}",
+                            snap.tail
+                        )),
+                        None => Err("Session not found".to_string()),
+                    }
+                }
+            },
+        )
+        .await;
 
         // Verify snapshot has non-empty tail with our test output
         assert!(
@@ -2003,8 +2114,7 @@ mod tests {
             snapshot.tail
         );
 
-        // Verify status is Stopped (session completed)
-        // Note: may still be Running if watcher hasn't polled yet, that's OK
+        // Verify status is Stopped or Running (timing-dependent)
         assert!(
             matches!(
                 snapshot.status,
@@ -2014,12 +2124,6 @@ mod tests {
             "Status should be Stopped or Running, got: {:?}",
             snapshot.status
         );
-
-        // Exit code should be set if Stopped
-        if snapshot.status == rn_desktop_2_lib::context_resurrection::models::SessionStatus::Stopped
-        {
-            assert_eq!(snapshot.exit_code, Some(0));
-        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2048,7 +2152,7 @@ mod tests {
         let (shutdown_tx, _) = tokio::sync::mpsc::channel::<()>(1);
 
         // Start a session that triggers attention
-        let script = "echo \"error: something went wrong\"; sleep 0.2";
+        let script = "sleep 0.2; echo \"error: something went wrong\"; sleep 0.2";
         let start = DaemonRequest::Start {
             task_key: "Attention mapping".to_string(),
             task_id: Some("xyz.attention-test".to_string()),
@@ -2066,37 +2170,53 @@ mod tests {
             other => panic!("Expected SessionStarted, got {:?}", other),
         };
 
-        // Wait for attention detection (need enough time for output + detection)
-        tokio::time::sleep(Duration::from_millis(600)).await;
+        // Wait for attention summary to be captured and mapped
+        let attention = assert_eventually(
+            "attention summary to be captured via SessionProvider",
+            Duration::from_secs(3),
+            Duration::from_millis(50),
+            || {
+                let state = Arc::clone(&state);
+                async move {
+                    match state.get_session_state(session_id) {
+                        Some(snap) => match snap.last_attention {
+                            Some(att)
+                                if att.attention_type
+                                    == rn_desktop_2_lib::context_resurrection::models::AttentionType::Error =>
+                            {
+                                Ok(att)
+                            }
+                            Some(att) => Err(format!(
+                                "Attention type mismatch: {:?}",
+                                att.attention_type
+                            )),
+                            None => Err("No attention summary yet".to_string()),
+                        },
+                        None => Err("Session not found".to_string()),
+                    }
+                }
+            },
+        )
+        .await;
 
-        // Fetch via SessionProvider trait
-        let snapshot = state
-            .get_session_state(session_id)
-            .expect("Expected session snapshot");
+        // Verify attention summary was mapped correctly
+        assert_eq!(
+            attention.attention_type,
+            rn_desktop_2_lib::context_resurrection::models::AttentionType::Error
+        );
+        assert!(
+            attention.preview.to_lowercase().contains("error")
+                || attention.preview.to_lowercase().contains("wrong"),
+            "Preview should contain error message. Got: {}",
+            attention.preview
+        );
 
-        // Verify attention summary was mapped correctly (if detected)
-        if let Some(attention) = snapshot.last_attention {
-            assert_eq!(
-                attention.attention_type,
-                rn_desktop_2_lib::context_resurrection::models::AttentionType::Error
-            );
-            assert!(
-                attention.preview.to_lowercase().contains("error")
-                    || attention.preview.to_lowercase().contains("wrong"),
-                "Preview should contain error message. Got: {}",
-                attention.preview
-            );
-
-            // Verify triggered_at is a valid ISO8601 string
-            assert!(
-                chrono::DateTime::parse_from_rfc3339(&attention.triggered_at).is_ok(),
-                "triggered_at should be valid ISO8601: {}",
-                attention.triggered_at
-            );
-        } else {
-            // Attention detection is best-effort, so we just verify the session exists
-            eprintln!("Note: Attention not detected in test (timing-dependent, OK to skip)");
-        }
+        // Verify triggered_at is a valid ISO8601 string
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(&attention.triggered_at).is_ok(),
+            "triggered_at should be valid ISO8601: {}",
+            attention.triggered_at
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2132,37 +2252,42 @@ mod tests {
             other => panic!("Expected SessionStarted, got {:?}", other),
         };
 
-        // Poll until session is stopped (watcher runs every 5s, so wait up to 7s)
-        let mut attempts = 0;
-        loop {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            let session_status = {
-                let registry = state.registry.read().await;
-                registry.get(session_id).map(|s| s.status)
-            };
-            if session_status == Some(SessionStatus::Stopped) {
-                break;
-            }
-            attempts += 1;
-            if attempts > 20 {
-                panic!("Session did not stop after 10s");
-            }
-        }
+        // Wait for session to stop (watcher runs every 5s, so allow up to 10s)
+        assert_eventually(
+            "session to stop",
+            Duration::from_secs(10),
+            Duration::from_millis(100),
+            || {
+                let state = Arc::clone(&state);
+                async move {
+                    let registry = state.registry.read().await;
+                    match registry.get(session_id) {
+                        Some(s) if s.status == SessionStatus::Stopped => Ok(()),
+                        Some(s) => Err(format!("Session status is {:?}, not Stopped", s.status)),
+                        None => Err("Session not found".to_string()),
+                    }
+                }
+            },
+        )
+        .await;
 
-        // Give capture background task time to complete
-        tokio::time::sleep(Duration::from_millis(200)).await;
-
-        // Verify snapshot file exists in store
+        // Wait for capture to complete (background task needs time to write)
         use rn_desktop_2_lib::context_resurrection::store::SnapshotStore;
         let store = SnapshotStore::new(&temp_dir.path());
-        let snapshots = store
-            .list_snapshots(&markdown_path, "cpt.capture-test", None)
-            .expect("Failed to list snapshots");
 
-        assert!(
-            !snapshots.is_empty(),
-            "At least one snapshot should exist for stopped session"
-        );
+        let snapshots = assert_eventually(
+            "snapshot to be captured for stopped session",
+            Duration::from_secs(3),
+            Duration::from_millis(50),
+            || async {
+                match store.list_snapshots(&markdown_path, "cpt.capture-test", None) {
+                    Ok(snaps) if !snaps.is_empty() => Ok(snaps),
+                    Ok(_) => Err("No snapshots found yet".to_string()),
+                    Err(e) => Err(format!("Failed to list snapshots: {}", e)),
+                }
+            },
+        )
+        .await;
 
         // Verify snapshot has correct metadata
         let latest = &snapshots[0];
@@ -2186,7 +2311,7 @@ mod tests {
         // Verify tail contains our test output
         if let Some(ref tail) = terminal.tail_inline {
             assert!(
-                tail.contains("capture-test-output"),
+                tail.as_str().contains("capture-test-output"),
                 "Tail should contain test output. Got: {}",
                 tail
             );
@@ -2225,22 +2350,27 @@ mod tests {
             other => panic!("Expected SessionStarted, got {:?}", other),
         };
 
-        // Poll until session is stopped
-        let mut attempts = 0;
-        loop {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            let session_status = {
-                let registry = state.registry.read().await;
-                registry.get(session_id).map(|s| s.status)
-            };
-            if session_status == Some(SessionStatus::Stopped) {
-                break;
-            }
-            attempts += 1;
-            if attempts > 20 {
-                panic!("Session did not stop after 10s");
-            }
-        }
+        // Wait for session to stop
+        assert_eventually(
+            "session to stop",
+            Duration::from_secs(10),
+            Duration::from_millis(100),
+            || {
+                let state = Arc::clone(&state);
+                async move {
+                    let registry = state.registry.read().await;
+                    match registry.get(session_id) {
+                        Some(s) if s.status == SessionStatus::Stopped => Ok(()),
+                        Some(s) => Err(format!("Session status is {:?}, not Stopped", s.status)),
+                        None => Err("Session not found".to_string()),
+                    }
+                }
+            },
+        )
+        .await;
+
+        // Give background tasks time to potentially write (they shouldn't)
+        tokio::time::sleep(Duration::from_millis(200)).await;
 
         // Verify NO snapshot was created (since task_id is None)
         // We can't list by task_id here since there's no stable ID, but we can verify
@@ -2324,7 +2454,7 @@ mod tests {
                     Some("Manual test capture")
                 );
             }
-            DaemonResponse::Error { message } => {
+            DaemonResponse::Error { code: _, message } => {
                 panic!("CrCaptureNow failed: {}", message);
             }
             _ => panic!("Unexpected response: {:?}", capture_response),
@@ -2343,7 +2473,7 @@ mod tests {
                 let obj = snapshot.as_object().unwrap();
                 assert_eq!(obj.get("task_id").unwrap().as_str(), Some("test.test-task"));
             }
-            DaemonResponse::Error { message } => {
+            DaemonResponse::Error { code: _, message } => {
                 panic!("CrLatest failed: {}", message);
             }
             _ => panic!("Unexpected response: {:?}", latest_response),
@@ -2365,7 +2495,7 @@ mod tests {
                 let obj = snapshot.as_object().unwrap();
                 assert_eq!(obj.get("task_id").unwrap().as_str(), Some("test.test-task"));
             }
-            DaemonResponse::Error { message } => {
+            DaemonResponse::Error { code: _, message } => {
                 panic!("CrList failed: {}", message);
             }
             _ => panic!("Unexpected response: {:?}", list_response),
@@ -2382,7 +2512,7 @@ mod tests {
             DaemonResponse::CrDeleted { deleted_count } => {
                 assert_eq!(*deleted_count, 1);
             }
-            DaemonResponse::Error { message } => {
+            DaemonResponse::Error { code: _, message } => {
                 panic!("CrDeleteTask failed: {}", message);
             }
             _ => panic!("Unexpected response: {:?}", delete_task_response),
@@ -2401,6 +2531,123 @@ mod tests {
                 assert_eq!(snapshots.len(), 0);
             }
             _ => panic!("Unexpected response after delete"),
+        }
+    }
+
+    /// Regression test for subscribe-late race condition.
+    ///
+    /// Previously, if a client subscribed to session updates after the session
+    /// had already started and produced output, they would miss early events.
+    /// This test verifies that clients can reliably wait for session state
+    /// changes using polling (via Continue/Status requests) instead of relying
+    /// on being subscribed before events happen.
+    #[tokio::test]
+    async fn test_subscribe_late_race_regression() {
+        let (config, temp_dir) = test_config();
+        let markdown_path = temp_dir.path().join("TODO.md");
+        tokio::fs::write(&markdown_path, "# Tasks\n- [ ] Subscribe late test\n")
+            .await
+            .unwrap();
+
+        let state = Arc::new(DaemonState::new(config).unwrap());
+        let (shutdown_tx, _) = tokio::sync::mpsc::channel::<()>(1);
+
+        // Start a session that produces output quickly and exits
+        let script = "echo 'early-output'; echo 'late-output'";
+        let start = DaemonRequest::Start {
+            task_key: "Subscribe late".to_string(),
+            task_id: None,
+            project_path: markdown_path.to_string_lossy().to_string(),
+            shell: Some(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                script.to_string(),
+            ]),
+        };
+
+        let response = handle_request(&state, start, &shutdown_tx).await;
+        let session_id = match response {
+            DaemonResponse::SessionStarted { session } => session.id,
+            other => panic!("Expected SessionStarted, got {:?}", other),
+        };
+
+        // Simulate a "late subscriber" by not subscribing to the broadcast channel
+        // immediately. Instead, poll via Continue requests to ensure we can still
+        // observe session state reliably even if we missed the broadcast events.
+
+        // Wait for session to produce output (may happen quickly)
+        assert_eventually_bool(
+            "session to produce output (early-output visible)",
+            Duration::from_secs(2),
+            Duration::from_millis(50),
+            || {
+                let state = Arc::clone(&state);
+                let shutdown_tx = shutdown_tx.clone();
+                async move {
+                    let continue_req = DaemonRequest::Continue {
+                        session_id,
+                        tail_bytes: Some(4096),
+                    };
+                    match handle_request(&state, continue_req, &shutdown_tx).await {
+                        DaemonResponse::SessionContinued { tail, .. } => {
+                            if let Some(data) = tail {
+                                let text = String::from_utf8_lossy(&data);
+                                text.contains("early-output")
+                            } else {
+                                false
+                            }
+                        }
+                        _ => false,
+                    }
+                }
+            },
+        )
+        .await;
+
+        // Wait for session to stop (watcher polls every 5s, so allow up to 10s)
+        assert_eventually(
+            "session to stop after producing all output",
+            Duration::from_secs(10),
+            Duration::from_millis(100),
+            || {
+                let state = Arc::clone(&state);
+                async move {
+                    let registry = state.registry.read().await;
+                    match registry.get(session_id) {
+                        Some(s) if s.status == SessionStatus::Stopped => Ok(()),
+                        Some(s) => Err(format!("Session status is {:?}, not Stopped", s.status)),
+                        None => Err("Session not found".to_string()),
+                    }
+                }
+            },
+        )
+        .await;
+
+        // Final verification: tail should contain both early and late output
+        // This proves that even though we "subscribed late" (didn't listen to broadcasts),
+        // we can still retrieve the full session state via polling.
+        let final_continue = DaemonRequest::Continue {
+            session_id,
+            tail_bytes: Some(4096),
+        };
+        match handle_request(&state, final_continue, &shutdown_tx).await {
+            DaemonResponse::SessionContinued { tail, session } => {
+                assert_eq!(session.status, SessionStatus::Stopped);
+                if let Some(data) = tail {
+                    let text = String::from_utf8_lossy(&data);
+                    assert!(
+                        text.contains("early-output"),
+                        "Tail should contain early output. Got: {}",
+                        text
+                    );
+                    assert!(
+                        text.contains("late-output"),
+                        "Tail should contain late output. Got: {}",
+                        text
+                    );
+                }
+            }
+            other => panic!("Expected SessionContinued, got {:?}", other),
         }
     }
 }

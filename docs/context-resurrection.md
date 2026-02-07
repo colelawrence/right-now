@@ -24,11 +24,20 @@ Each snapshot is a JSON file (schema `ContextSnapshotV1`) containing (best-effor
 
 ## Where it is stored
 
-By default the daemon uses `~/.right-now/` as its data directory (macOS + Linux). You can override this with:
+The daemon uses separate directories for runtime and persistent state:
 
-- `RIGHT_NOW_DAEMON_DIR=/custom/path`
+**Runtime directory** (socket + PID file):
+- **macOS**: `~/.right-now/` (same as state directory)
+- **Linux**: `$XDG_RUNTIME_DIR/right-now` if set, else `~/.right-now/`
+- Fallback: `/tmp/right-now` if home directory unavailable
 
-CR data lives under:
+**State directory** (sessions.json + CR snapshots):
+- **All platforms**: `~/.right-now/`
+- Fallback: `/tmp/right-now` if home directory unavailable
+
+**Environment override**: `RIGHT_NOW_DAEMON_DIR=/custom/path` overrides **both** runtime and state directories (everything under the custom path).
+
+CR data lives under the state directory:
 
 - `~/.right-now/context-resurrection/`
   - `snapshots/<project-hash>/<task-id>/<snapshot-id>.json`
@@ -77,9 +86,18 @@ UI: Resurrection Card → **Forget project**
 
 ### 3) Global deletion (manual)
 
-To delete everything:
+To delete all CR snapshots:
 
 - Remove `~/.right-now/context-resurrection/` entirely.
+
+To reset the daemon completely (sessions + CR snapshots + socket/PID):
+
+- **State data**: `rm -rf ~/.right-now/`
+- **Runtime files** (Linux with `XDG_RUNTIME_DIR`): `rm -rf $XDG_RUNTIME_DIR/right-now/`
+
+Or if using `RIGHT_NOW_DAEMON_DIR=/custom/path`:
+
+- Remove the entire custom directory: `rm -rf /custom/path/`
 
 ## Smoke checklist (release readiness)
 

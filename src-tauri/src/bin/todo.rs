@@ -340,7 +340,7 @@ fn main() -> Result<()> {
                                     config.clone(),
                                 )?;
                             }
-                            DaemonResponse::Error { message } => {
+                            DaemonResponse::Error { code: _, message } => {
                                 eprintln!("Error attaching: {}", message);
                                 std::process::exit(1);
                             }
@@ -351,7 +351,7 @@ fn main() -> Result<()> {
                         }
                     }
                 }
-                DaemonResponse::Error { message } => {
+                DaemonResponse::Error { code: _, message } => {
                     eprintln!("Error: {}", message);
                     std::process::exit(1);
                 }
@@ -408,7 +408,7 @@ fn main() -> Result<()> {
                             config.clone(),
                         )?;
                     }
-                    DaemonResponse::Error { message } => {
+                    DaemonResponse::Error { code: _, message } => {
                         eprintln!("Error: {}", message);
                         std::process::exit(1);
                     }
@@ -432,7 +432,7 @@ fn main() -> Result<()> {
                         DaemonResponse::SessionContinued { session, tail } => {
                             print_session_summary(&session, tail.as_deref())?;
                         }
-                        DaemonResponse::Error { message } => {
+                        DaemonResponse::Error { code: _, message } => {
                             eprintln!("Error: {}", message);
                             std::process::exit(1);
                         }
@@ -474,7 +474,7 @@ fn main() -> Result<()> {
                             }
                         }
                     }
-                    DaemonResponse::Error { message } => {
+                    DaemonResponse::Error { code: _, message } => {
                         eprintln!("Error: {}", message);
                         std::process::exit(1);
                     }
@@ -506,7 +506,7 @@ fn main() -> Result<()> {
                     DaemonResponse::SessionStopped { session } => {
                         println!("Stopped session {} for '{}'", session.id, session.task_key);
                     }
-                    DaemonResponse::Error { message } => {
+                    DaemonResponse::Error { code: _, message } => {
                         eprintln!("Error: {}", message);
                         std::process::exit(1);
                     }
@@ -542,7 +542,7 @@ fn main() -> Result<()> {
                         println!("  Created: {}", session.created_at);
                         println!("  Deep link: {}", session.deep_link());
                     }
-                    DaemonResponse::Error { message } => {
+                    DaemonResponse::Error { code: _, message } => {
                         eprintln!("Error: {}", message);
                         std::process::exit(1);
                     }
@@ -878,7 +878,7 @@ fn send_resize_request(config: &Config, session_id: u64, cols: u16, rows: u16) -
     };
     match send_request(&mut stream, &request)? {
         DaemonResponse::SessionResized { .. } => Ok(()),
-        DaemonResponse::Error { message } => Err(anyhow!(message)),
+        DaemonResponse::Error { code: _, message } => Err(anyhow!(message)),
         other => Err(anyhow!("Unexpected resize response: {:?}", other)),
     }
 }

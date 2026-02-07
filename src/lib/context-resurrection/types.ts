@@ -111,8 +111,18 @@ export type CrDeletedResponse = {
   deleted_count: number;
 };
 
+export type DaemonErrorCode =
+  | "not_found"
+  | "skipped"
+  | "invalid_request"
+  | "store_unavailable"
+  | "internal"
+  | "daemon_unavailable"
+  | "timeout";
+
 export type DaemonErrorResponse = {
   type: "error";
+  code: DaemonErrorCode;
   message: string;
 };
 

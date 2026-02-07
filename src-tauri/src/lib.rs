@@ -20,6 +20,9 @@ pub mod cli_paths;
 // Context resurrection module (snapshot capture + storage + query)
 pub mod context_resurrection;
 
+// Test utilities (helpers for async test assertions)
+pub mod test_utils;
+
 // Test harness module (only compiled with test-harness feature)
 #[cfg(feature = "test-harness")]
 pub mod test_harness;
