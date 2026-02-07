@@ -20,6 +20,7 @@ interface TaskListProps {
   onCompleteTask: (task: ProjectMarkdown & { type: "task" }) => void;
   onMoveHeadingSection?: (headingIndex: number, direction: "up" | "down") => void;
   onSetActiveTask?: (taskId: string | undefined) => Promise<void>;
+  onEnsureTaskId?: (task: ProjectMarkdown & { type: "task" }) => Promise<string | undefined>;
   projectFullPath?: string;
 
   // Context Resurrection UI affordances
@@ -32,6 +33,7 @@ export function TaskList({
   onCompleteTask,
   onMoveHeadingSection,
   onSetActiveTask,
+  onEnsureTaskId,
   projectFullPath,
   taskHasContext,
   onOpenResurrection,
@@ -94,6 +96,7 @@ export function TaskList({
                     onCompleteTask={onCompleteTask}
                     sessionClient={sessionClient}
                     onSetActiveTask={onSetActiveTask}
+                    onEnsureTaskId={onEnsureTaskId}
                     projectFullPath={projectFullPath}
                     hasContext={Boolean(item.taskId && taskHasContext?.[item.taskId])}
                     onOpenResurrection={
@@ -157,6 +160,7 @@ interface TaskRowProps {
   onCompleteTask: (task: ProjectMarkdown & { type: "task" }) => void;
   sessionClient: SessionClient;
   onSetActiveTask?: (taskId: string | undefined) => Promise<void>;
+  onEnsureTaskId?: (task: ProjectMarkdown & { type: "task" }) => Promise<string | undefined>;
   projectFullPath?: string;
 
   hasContext?: boolean;
@@ -168,6 +172,7 @@ function TaskRow({
   onCompleteTask,
   sessionClient,
   onSetActiveTask,
+  onEnsureTaskId,
   projectFullPath,
   hasContext,
   onOpenResurrection,
@@ -184,12 +189,21 @@ function TaskRow({
     setActionError(null);
     setIsActing(true);
     try {
-      // Update active task ID first (before daemon adds session badge)
-      if (onSetActiveTask && task.taskId) {
-        await onSetActiveTask(task.taskId);
+      let ensuredTaskId = task.taskId ?? undefined;
+
+      // Lazily assign a stable task ID when the user first starts a session.
+      if (!ensuredTaskId && onEnsureTaskId) {
+        ensuredTaskId = await onEnsureTaskId(task);
       }
 
-      await sessionClient.startSession(task.name, projectFullPath, task.taskId ?? undefined);
+      // Update active task ID first (before daemon adds session badge)
+      if (onSetActiveTask) {
+        await onSetActiveTask(ensuredTaskId);
+      }
+
+      // If we have a task ID, use it as the key so the daemon matches by stable ID.
+      const startKey = ensuredTaskId ?? task.name;
+      await sessionClient.startSession(startKey, projectFullPath, ensuredTaskId);
       // Session badge will be added by daemon; file watcher will reload
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

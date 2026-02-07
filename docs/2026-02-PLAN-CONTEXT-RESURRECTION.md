@@ -452,19 +452,33 @@ UI provides the first two via explicit actions; the third is documented for powe
 - Rust test: parse same fixture, assert extracted IDs match same expected JSON
 - Both tests run in CI; failure = contract broken
 
-### Generation rules
+### Generation rules (decision)
 
-- On first time the UI sees a task without an ID, it can offer:
-  - "Assign IDs to tasks" (one-time action), or
-  - silently assign when user interacts with the task (recommended to avoid mass diff churn).
+**Decision (v1): lazy assignment on interaction.**
+- The UI assigns a task ID the first time the user performs an action that benefits from stable identity:
+  - starting a session (▶ Start)
+  - (optional future) bulk "Assign IDs…" action
+- Assignment **writes back to TODO.md immediately** (keeps diffs small; avoids background migrations).
+
+**Derived-label (slug) derivation (must match TS `generateTaskId()`):**
+- Lowercase ASCII
+- Remove any character not in `[a-z0-9\s-]`
+- `trim()`
+- Collapse whitespace to single `-`
+- Collapse repeated `-` to a single `-`
+- Trim leading/trailing `-`
+- Truncate to 40 characters
+- If empty, use `"task"`
 
 **Collision avoidance (required):**
-1. Generator maintains a set of existing 3-letter prefixes in the file.
-2. New prefix is generated randomly; if collision, regenerate (up to 10 attempts).
-3. If 10 attempts fail (file has >17,000 tasks or extreme bad luck), extend to 4 letters for that ID only.
-4. On file parse, if duplicate prefixes are detected, log a warning but do not auto-fix (user may have manually edited).
+- IDs must be unique as the full `<prefix>.<derived-label>` string within the file.
+- Prefix uniqueness alone is **not** required.
+- Generator strategy:
+  1. Try up to 100 random 3-letter prefixes.
+  2. If still colliding, try up to 100 random 4-letter prefixes.
+  3. Last resort: append `-<epochMs>`.
 
-**Owner:** TS `ensureTaskId()` implements collision check; Rust parser validates uniqueness on load.
+**Owner:** TS `generateTaskId()/ensureTaskId()` implement this; Rust preserves IDs during badge updates.
 
 ### Preservation rules
 

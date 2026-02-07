@@ -28,7 +28,7 @@ import {
   revealTodoFile,
   useDeepLink,
 } from "./lib";
-import type { ProjectMarkdown } from "./lib/ProjectStateEditor";
+import { type ProjectMarkdown, type TaskBlock, ensureTaskId } from "./lib/ProjectStateEditor";
 import type { Clock } from "./lib/clock";
 import type { EventBus } from "./lib/events";
 import type { LoadedProjectState, ProjectFile, WorkState } from "./lib/project";
@@ -808,6 +808,25 @@ function AppPlanner({
           }}
           onSetActiveTask={async (taskId) => {
             await projectManager.setActiveTask(taskId);
+          }}
+          onEnsureTaskId={async (task) => {
+            let ensured: string | undefined;
+
+            await projectManager.updateProject((draft) => {
+              const tasks = draft.markdown.filter((m): m is TaskBlock => m.type === "task");
+              const existingIds = new Set<string>();
+              for (const t of tasks) {
+                if (t.taskId) existingIds.add(t.taskId);
+              }
+
+              const target = tasks.find((t) => t.name === task.name);
+              if (!target) return;
+
+              ensureTaskId(target, existingIds);
+              ensured = target.taskId ?? undefined;
+            });
+
+            return ensured;
           }}
           projectFullPath={loaded?.fullPath}
           taskHasContext={crTaskHasContext}

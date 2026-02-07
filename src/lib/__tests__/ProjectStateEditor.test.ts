@@ -1759,6 +1759,13 @@ pomodoro_settings:
       expect(taskId).toMatch(/^[a-z]{3}\.fix-bug-123-urgent$/);
     });
 
+    it("should collapse repeated hyphens and trim hyphens", () => {
+      const existingIds = new Set<string>();
+      const taskId = generateTaskId("--Hello  World--", existingIds);
+
+      expect(taskId).toMatch(/^[a-z]{3}\.hello-world$/);
+    });
+
     it("should handle task names with emojis", () => {
       const existingIds = new Set<string>();
       const taskId = generateTaskId("Deploy to production 🚀", existingIds);
