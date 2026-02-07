@@ -1904,7 +1904,8 @@ mod tests {
         let state = Arc::new(DaemonState::new(config).unwrap());
         let (shutdown_tx, _) = tokio::sync::mpsc::channel::<()>(1);
 
-        let script = "echo \"error: build failed\"; sleep 0.2";
+        // Delay output slightly so the attention monitor subscribes before the first bytes.
+        let script = "sleep 0.2; echo \"error: build failed\"; sleep 0.2";
         let start = DaemonRequest::Start {
             task_key: "Attention".to_string(),
             task_id: None,

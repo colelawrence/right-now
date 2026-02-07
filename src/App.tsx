@@ -1,7 +1,8 @@
 import { IconCheck, IconClipboard, IconEdit, IconFolder, IconTerminal } from "@tabler/icons-react";
 import { Window } from "@tauri-apps/api/window";
 import { useAtom } from "jotai";
-import { forwardRef, useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
+import { ResurrectionCard } from "./components/ResurrectionCard";
 import { SessionsDebugPanel } from "./components/SessionsDebugPanel";
 import { StateControls } from "./components/StateControls";
 import { TaskList } from "./components/TaskList";
@@ -11,11 +12,16 @@ import { Welcome } from "./components/Welcome";
 import { Markdown, MarkdownProvider } from "./components/markdown";
 import {
   type AppWindows,
+  type ContextSnapshotV1,
+  CrClient,
   type ISoundManager,
   type ProjectManager,
   type ProjectStore,
+  SessionClient,
   copyTodoFilePath,
+  createTauriCrTransport,
   formatDisplayPath,
+  loadResurrectionState,
   openTodoFile,
   revealTodoFile,
   useDeepLink,
@@ -107,6 +113,15 @@ function AppReady({ controllers, startupWarning }: { controllers: AppControllers
   const timerStateRef = useRef<Partial<TimerState>>({});
   const [showWalkthrough, setShowWalkthrough] = useState(false);
 
+  const crClient = useMemo(() => new CrClient(createTauriCrTransport()), []);
+  const sessionClient = useMemo(() => new SessionClient(), []);
+
+  const [crDaemonUnavailable, setCrDaemonUnavailable] = useState(false);
+  const [crTaskHasContext, setCrTaskHasContext] = useState<Record<string, boolean>>({});
+  const [crCardSnapshot, setCrCardSnapshot] = useState<ContextSnapshotV1 | null>(null);
+  const [crCardPinned, setCrCardPinned] = useState(false);
+  const [crDismissedSnapshotId, setCrDismissedSnapshotId] = useState<string | null>(null);
+
   // Check if user has seen walkthrough on mount
   useEffect(() => {
     projectStore.getHasSeenWalkthrough().then((hasSeen) => {
@@ -154,6 +169,67 @@ function AppReady({ controllers, startupWarning }: { controllers: AppControllers
     const intervalId = clock.setInterval(checkTimer, 5000);
     return () => clock.clearInterval(intervalId);
   }, [loaded, eventBus, clock]);
+
+  const resurrectionTasks = useMemo(() => {
+    if (!loaded) return [] as Array<{ taskId?: string | null }>;
+    return loaded.projectFile.markdown
+      .filter((m): m is ProjectMarkdown & { type: "task" } => m.type === "task")
+      .map((t) => ({ taskId: t.taskId }));
+  }, [loaded?.textContent]);
+
+  // Reset ephemeral card state when switching projects
+  useEffect(() => {
+    setCrCardPinned(false);
+    setCrCardSnapshot(null);
+    setCrDismissedSnapshotId(null);
+    setCrTaskHasContext({});
+    setCrDaemonUnavailable(false);
+  }, [loaded?.fullPath]);
+
+  // Load context resurrection state on project changes / edits.
+  useEffect(() => {
+    if (!loaded) return;
+
+    let cancelled = false;
+
+    loadResurrectionState({
+      client: crClient,
+      projectPath: loaded.fullPath,
+      activeTaskId: loaded.projectFile.activeTaskId,
+      tasks: resurrectionTasks,
+    })
+      .then((result) => {
+        if (cancelled) return;
+
+        setCrDaemonUnavailable(result.daemonUnavailable);
+        setCrTaskHasContext(result.taskHasContext);
+
+        if (crCardPinned) return;
+
+        const nextSnapshot = result.selected?.snapshot ?? null;
+        if (nextSnapshot && nextSnapshot.id === crDismissedSnapshotId) {
+          setCrCardSnapshot(null);
+        } else {
+          setCrCardSnapshot(nextSnapshot);
+        }
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error("Failed to load resurrection state:", error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    loaded?.fullPath,
+    loaded?.textContent,
+    loaded?.projectFile.activeTaskId,
+    crClient,
+    crCardPinned,
+    crDismissedSnapshotId,
+    resurrectionTasks,
+  ]);
 
   const handleCompleteTask = (task: ProjectMarkdown & { type: "task" }, draft: ProjectFile) => {
     // Find the completion mark style from other completed tasks
@@ -234,6 +310,76 @@ function AppReady({ controllers, startupWarning }: { controllers: AppControllers
     setShowWalkthrough(true);
   };
 
+  const handleDismissResurrectionCard = () => {
+    if (crCardSnapshot) {
+      setCrDismissedSnapshotId(crCardSnapshot.id);
+    }
+    setCrCardSnapshot(null);
+    setCrCardPinned(false);
+  };
+
+  const handleOpenResurrectionForTask = async (taskId: string) => {
+    if (!loaded) return;
+
+    // Pin the card so the auto-load effect doesn't immediately replace it.
+    setCrCardPinned(true);
+
+    // Update the active-task pointer (best effort).
+    await projectManager.setActiveTask(taskId);
+
+    const latest = await crClient.latest(loaded.fullPath, taskId);
+    if (!latest.ok) {
+      if (latest.error.type === "daemon_unavailable") {
+        setCrDaemonUnavailable(true);
+        alert("Context Resurrection is unavailable (daemon not running)");
+      } else {
+        alert(`Failed to load snapshot: ${"message" in latest.error ? latest.error.message : latest.error.type}`);
+      }
+      return;
+    }
+
+    if (!latest.value) {
+      alert("No snapshots found for this task");
+      setCrCardSnapshot(null);
+      return;
+    }
+
+    setCrCardSnapshot(latest.value);
+    setCrDismissedSnapshotId(null);
+  };
+
+  const handleResumeFromResurrectionCard = async (snapshot: ContextSnapshotV1) => {
+    if (!loaded) return;
+
+    // Ensure the active task pointer is set.
+    await projectManager.setActiveTask(snapshot.task_id);
+
+    try {
+      const terminal = snapshot.terminal;
+
+      // If the session is still running/waiting, attach/continue.
+      if (terminal && terminal.status !== "Stopped") {
+        const result = await sessionClient.continueSession(terminal.session_id, 512);
+        const tail = SessionClient.tailBytesToString(result.tail);
+        if (tail) {
+          alert(`Session output (last 512 bytes):\n\n${tail}`);
+        } else {
+          alert(`Session ${terminal.session_id} continued (no recent output)`);
+        }
+      } else {
+        // Otherwise, start a new session. Use task_id as the key so the daemon matches by stable ID.
+        await sessionClient.startSession(snapshot.task_id, loaded.fullPath, snapshot.task_id);
+      }
+
+      // Hide the card after resuming.
+      setCrCardSnapshot(null);
+      setCrCardPinned(false);
+    } catch (error) {
+      console.error("Failed to resume from snapshot:", error);
+      alert(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   // If no project is loaded, show the choose project UI
   if (!loaded || !project) {
     return (
@@ -270,6 +416,14 @@ function AppReady({ controllers, startupWarning }: { controllers: AppControllers
     toggleCompact: () => setIsCompact(!isCompact),
     onShowWalkthrough: handleShowWalkthrough,
     projectManager,
+
+    // Context Resurrection integration
+    crDaemonUnavailable,
+    crTaskHasContext,
+    crCardSnapshot,
+    onDismissResurrectionCard: handleDismissResurrectionCard,
+    onOpenResurrectionForTask: handleOpenResurrectionForTask,
+    onResumeResurrectionCard: handleResumeFromResurrectionCard,
   };
 
   return (
@@ -293,6 +447,14 @@ interface AppViewProps {
   toggleCompact: () => void;
   onShowWalkthrough: () => void;
   projectManager: ProjectManager;
+
+  // Context Resurrection integration
+  crDaemonUnavailable: boolean;
+  crTaskHasContext: Record<string, boolean>;
+  crCardSnapshot: ContextSnapshotV1 | null;
+  onDismissResurrectionCard: () => void;
+  onOpenResurrectionForTask: (taskId: string) => void | Promise<void>;
+  onResumeResurrectionCard: (snapshot: ContextSnapshotV1) => void | Promise<void>;
 }
 
 function useCurrentTask(project: LoadedProjectState) {
@@ -463,6 +625,12 @@ function AppPlanner({
   toggleCompact,
   onShowWalkthrough,
   projectManager,
+  crDaemonUnavailable,
+  crTaskHasContext,
+  crCardSnapshot,
+  onDismissResurrectionCard,
+  onOpenResurrectionForTask,
+  onResumeResurrectionCard,
 }: AppViewProps) {
   const sessionsDebugEnabled = import.meta.env.DEV;
   const [showSessionsDebug, setShowSessionsDebug] = useState(false);
@@ -555,7 +723,22 @@ function AppPlanner({
             await projectManager.setActiveTask(taskId);
           }}
           projectFullPath={loaded?.fullPath}
+          taskHasContext={crTaskHasContext}
+          onOpenResurrection={onOpenResurrectionForTask}
         />
+
+        {crDaemonUnavailable && (
+          <div className="mt-2 text-xs text-gray-500">Context Resurrection is unavailable (daemon not running).</div>
+        )}
+
+        {crCardSnapshot && (
+          <ResurrectionCard
+            snapshot={crCardSnapshot}
+            onDismiss={onDismissResurrectionCard}
+            onResume={() => onResumeResurrectionCard(crCardSnapshot)}
+          />
+        )}
+
         {sessionsDebugEnabled && showSessionsDebug && <SessionsDebugPanel />}
       </div>
       <footer className="absolute bottom-0 right-4">

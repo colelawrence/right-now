@@ -297,6 +297,29 @@ fn session_continue(
     })
 }
 
+#[cfg(unix)]
+#[tauri::command]
+fn cr_request(
+    request: session::protocol::DaemonRequest,
+) -> Result<session::protocol::DaemonResponse, String> {
+    use session::daemon_client::send_request;
+    use session::protocol::DaemonRequest;
+
+    match &request {
+        DaemonRequest::CrLatest { .. }
+        | DaemonRequest::CrList { .. }
+        | DaemonRequest::CrGet { .. }
+        | DaemonRequest::CrCaptureNow { .. }
+        | DaemonRequest::CrDeleteTask { .. }
+        | DaemonRequest::CrDeleteProject { .. } => {}
+        _ => {
+            return Err("Unsupported request type for cr_request".to_string());
+        }
+    }
+
+    send_request(request).map_err(|e| e.to_string())
+}
+
 // Stub commands for non-Unix platforms
 #[cfg(not(unix))]
 #[tauri::command]
@@ -324,6 +347,14 @@ fn session_stop(_session_id: u64) -> Result<(), String> {
 #[tauri::command]
 fn session_continue(_session_id: u64, _tail_bytes: Option<usize>) -> Result<(), String> {
     Err("Session management not yet supported on this platform".to_string())
+}
+
+#[cfg(not(unix))]
+#[tauri::command]
+fn cr_request(
+    _request: session::protocol::DaemonRequest,
+) -> Result<session::protocol::DaemonResponse, String> {
+    Err("Context Resurrection not yet supported on this platform".to_string())
 }
 
 // ============================================================================
@@ -580,7 +611,8 @@ pub fn run() {
             session_list,
             session_start,
             session_stop,
-            session_continue
+            session_continue,
+            cr_request
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -671,6 +703,7 @@ pub fn create_test_harness_builder() -> tauri::Builder<tauri::Wry> {
             session_start,
             session_stop,
             session_continue,
+            cr_request,
             // Test harness commands
             test_harness::test_create_temp_dir,
             test_harness::test_load_fixture,

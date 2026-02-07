@@ -2,6 +2,7 @@ import {
   IconCheckbox,
   IconChevronDown,
   IconChevronUp,
+  IconHistory,
   IconList,
   IconPlayerPause,
   IconPlayerPlay,
@@ -20,6 +21,10 @@ interface TaskListProps {
   onMoveHeadingSection?: (headingIndex: number, direction: "up" | "down") => void;
   onSetActiveTask?: (taskId: string | undefined) => Promise<void>;
   projectFullPath?: string;
+
+  // Context Resurrection UI affordances
+  taskHasContext?: Record<string, boolean>;
+  onOpenResurrection?: (taskId: string) => void | Promise<void>;
 }
 
 export function TaskList({
@@ -28,6 +33,8 @@ export function TaskList({
   onMoveHeadingSection,
   onSetActiveTask,
   projectFullPath,
+  taskHasContext,
+  onOpenResurrection,
 }: TaskListProps) {
   const sessionClient = new SessionClient();
   const [showSessionsPanel, setShowSessionsPanel] = useState(false);
@@ -88,6 +95,10 @@ export function TaskList({
                     sessionClient={sessionClient}
                     onSetActiveTask={onSetActiveTask}
                     projectFullPath={projectFullPath}
+                    hasContext={Boolean(item.taskId && taskHasContext?.[item.taskId])}
+                    onOpenResurrection={
+                      item.taskId && onOpenResurrection ? () => onOpenResurrection(item.taskId!) : undefined
+                    }
                   />
                 );
               }
@@ -147,9 +158,20 @@ interface TaskRowProps {
   sessionClient: SessionClient;
   onSetActiveTask?: (taskId: string | undefined) => Promise<void>;
   projectFullPath?: string;
+
+  hasContext?: boolean;
+  onOpenResurrection?: () => void | Promise<void>;
 }
 
-function TaskRow({ task, onCompleteTask, sessionClient, onSetActiveTask, projectFullPath }: TaskRowProps) {
+function TaskRow({
+  task,
+  onCompleteTask,
+  sessionClient,
+  onSetActiveTask,
+  projectFullPath,
+  hasContext,
+  onOpenResurrection,
+}: TaskRowProps) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [isActing, setIsActing] = useState(false);
 
@@ -219,6 +241,22 @@ function TaskRow({ task, onCompleteTask, sessionClient, onSetActiveTask, project
     }
   };
 
+  const handleOpenResurrection = async () => {
+    if (!onOpenResurrection) return;
+
+    setActionError(null);
+    setIsActing(true);
+    try {
+      await onOpenResurrection();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setActionError(message);
+      console.error("Failed to open resurrection card:", error);
+    } finally {
+      setIsActing(false);
+    }
+  };
+
   const showStartButton = !task.sessionStatus;
   const showContinueButton = !!task.sessionStatus;
   const showStopButton =
@@ -250,6 +288,14 @@ function TaskRow({ task, onCompleteTask, sessionClient, onSetActiveTask, project
               title={`Session ${task.sessionStatus.sessionId}`}
             >
               {task.sessionStatus.status}
+            </span>
+          )}
+          {hasContext && (
+            <span
+              className="text-xs px-2 py-0.5 rounded-full font-medium bg-purple-100 text-purple-700"
+              title="Has context snapshots"
+            >
+              Context
             </span>
           )}
         </div>
@@ -289,6 +335,16 @@ function TaskRow({ task, onCompleteTask, sessionClient, onSetActiveTask, project
             title="Stop session"
           >
             <IconPlayerPause size={16} />
+          </button>
+        )}
+        {hasContext && onOpenResurrection && (
+          <button
+            onClick={handleOpenResurrection}
+            disabled={isActing}
+            className="p-1.5 rounded hover:bg-purple-100 text-purple-700 disabled:opacity-50"
+            title="Resume from snapshot"
+          >
+            <IconHistory size={16} />
           </button>
         )}
       </div>

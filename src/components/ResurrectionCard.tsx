@@ -7,6 +7,7 @@ import { cn } from "./utils/cn";
 export interface ResurrectionCardProps {
   snapshot: ContextSnapshotV1;
   onDismiss: () => void;
+  onResume?: () => void | Promise<void>;
   className?: string;
 }
 
@@ -24,7 +25,7 @@ function statusBadge(status: string | undefined) {
   return null;
 }
 
-export function ResurrectionCard({ snapshot, onDismiss, className }: ResurrectionCardProps) {
+export function ResurrectionCard({ snapshot, onDismiss, onResume, className }: ResurrectionCardProps) {
   const data = useMemo(() => selectCardData(snapshot), [snapshot]);
 
   return (
@@ -122,6 +123,18 @@ export function ResurrectionCard({ snapshot, onDismiss, className }: Resurrectio
 
         {!data.terminal && !data.userNote && (
           <div className="text-sm text-gray-600">No additional context captured for this snapshot.</div>
+        )}
+
+        {onResume && (
+          <div className="mt-3 flex justify-end">
+            <button
+              type="button"
+              onClick={onResume}
+              className="px-3 py-1.5 bg-blue-500 text-white text-sm rounded hover:bg-blue-600 transition-colors"
+            >
+              Resume work
+            </button>
+          </div>
         )}
       </div>
     </div>
