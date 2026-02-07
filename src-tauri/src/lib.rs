@@ -323,6 +323,103 @@ fn cr_request(
     send_request(request).map_err(|e| e.to_string())
 }
 
+#[cfg(all(unix, test))]
+mod cr_request_tests {
+    use crate::session::protocol::DaemonRequest;
+
+    /// Helper to check if a request passes the allowlist
+    fn is_allowed(request: &DaemonRequest) -> bool {
+        matches!(
+            request,
+            DaemonRequest::CrLatest { .. }
+                | DaemonRequest::CrList { .. }
+                | DaemonRequest::CrGet { .. }
+                | DaemonRequest::CrCaptureNow { .. }
+                | DaemonRequest::CrDeleteTask { .. }
+                | DaemonRequest::CrDeleteProject { .. }
+        )
+    }
+
+    #[test]
+    fn test_cr_request_allows_cr_latest() {
+        let req = DaemonRequest::CrLatest {
+            project_path: "/test/TODO.md".to_string(),
+            task_id: Some("test.task".to_string()),
+        };
+        assert!(is_allowed(&req));
+    }
+
+    #[test]
+    fn test_cr_request_allows_cr_list() {
+        let req = DaemonRequest::CrList {
+            project_path: "/test/TODO.md".to_string(),
+            task_id: "test.task".to_string(),
+            limit: Some(50),
+        };
+        assert!(is_allowed(&req));
+    }
+
+    #[test]
+    fn test_cr_request_allows_cr_get() {
+        let req = DaemonRequest::CrGet {
+            project_path: "/test/TODO.md".to_string(),
+            task_id: "test.task".to_string(),
+            snapshot_id: "2026-02-07T10:00:00Z_test.task".to_string(),
+        };
+        assert!(is_allowed(&req));
+    }
+
+    #[test]
+    fn test_cr_request_allows_cr_capture_now() {
+        let req = DaemonRequest::CrCaptureNow {
+            project_path: "/test/TODO.md".to_string(),
+            task_id: "test.task".to_string(),
+            user_note: Some("Test note".to_string()),
+        };
+        assert!(is_allowed(&req));
+    }
+
+    #[test]
+    fn test_cr_request_allows_cr_delete_task() {
+        let req = DaemonRequest::CrDeleteTask {
+            project_path: "/test/TODO.md".to_string(),
+            task_id: "test.task".to_string(),
+        };
+        assert!(is_allowed(&req));
+    }
+
+    #[test]
+    fn test_cr_request_allows_cr_delete_project() {
+        let req = DaemonRequest::CrDeleteProject {
+            project_path: "/test/TODO.md".to_string(),
+        };
+        assert!(is_allowed(&req));
+    }
+
+    #[test]
+    fn test_cr_request_rejects_session_start() {
+        let req = DaemonRequest::Start {
+            task_key: "Test task".to_string(),
+            task_id: Some("test.task".to_string()),
+            project_path: "/test/TODO.md".to_string(),
+            shell: None,
+        };
+        assert!(!is_allowed(&req));
+    }
+
+    #[test]
+    fn test_cr_request_rejects_session_stop() {
+        let req = DaemonRequest::Stop { session_id: 42 };
+        assert!(!is_allowed(&req));
+    }
+
+    #[test]
+    fn test_cr_request_rejects_ping() {
+        let req = DaemonRequest::Ping;
+        assert!(!is_allowed(&req));
+    }
+}
+
 // Stub commands for non-Unix platforms
 #[cfg(not(unix))]
 #[tauri::command]

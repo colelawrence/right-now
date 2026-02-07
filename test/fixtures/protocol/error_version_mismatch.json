@@ -1,0 +1,5 @@
+{
+  "type": "error",
+  "code": "version_mismatch",
+  "message": "Daemon is newer than app—please update the app."
+}

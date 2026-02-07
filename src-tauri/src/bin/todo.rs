@@ -161,13 +161,64 @@ fn connect_to_daemon(config: &Config) -> Result<UnixStream> {
 }
 
 fn send_request(stream: &mut UnixStream, request: &DaemonRequest) -> Result<DaemonResponse> {
+    use rn_desktop_2_lib::session::protocol::{MAX_RESPONSE_FRAME_SIZE, PROTOCOL_VERSION};
+
+    // Perform handshake first
+    let handshake = DaemonRequest::Handshake {
+        client_version: PROTOCOL_VERSION,
+    };
+    let handshake_bytes = serialize_message(&handshake)?;
+    stream.write_all(&handshake_bytes)?;
+    stream.flush()?;
+
+    // Read handshake response
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+
+    // Enforce max response frame size
+    if line.len() > MAX_RESPONSE_FRAME_SIZE {
+        anyhow::bail!(
+            "Response frame too large: {} bytes (max {})",
+            line.len(),
+            MAX_RESPONSE_FRAME_SIZE
+        );
+    }
+
+    let handshake_response: DaemonResponse =
+        deserialize_message(line.as_bytes()).context("Failed to parse handshake response")?;
+
+    match handshake_response {
+        DaemonResponse::Handshake {
+            protocol_version: _,
+        } => {
+            // Handshake successful
+        }
+        DaemonResponse::Error { code: _, message } => {
+            anyhow::bail!("Handshake failed: {}", message);
+        }
+        other => {
+            anyhow::bail!("Expected handshake response, got: {:?}", other);
+        }
+    }
+
+    // Send the actual request
     let bytes = serialize_message(request)?;
     stream.write_all(&bytes)?;
     stream.flush()?;
 
-    let mut reader = BufReader::new(stream);
+    // Read response
     let mut line = String::new();
     reader.read_line(&mut line)?;
+
+    // Enforce max response frame size
+    if line.len() > MAX_RESPONSE_FRAME_SIZE {
+        anyhow::bail!(
+            "Response frame too large: {} bytes (max {})",
+            line.len(),
+            MAX_RESPONSE_FRAME_SIZE
+        );
+    }
 
     deserialize_message(line.as_bytes()).context("Failed to parse daemon response")
 }

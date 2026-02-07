@@ -1,0 +1,6 @@
+{
+  "type": "cr_capture_now",
+  "project_path": "/Users/test/projects/app/TODO.md",
+  "task_id": "abc.test-task",
+  "user_note": "Manual snapshot before refactoring"
+}

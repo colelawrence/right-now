@@ -11,6 +11,7 @@ use std::path::Path;
 /// Get the latest snapshot for a specific task, or None if no snapshots exist
 ///
 /// If store is unavailable or task_id is None, returns Ok(None).
+/// Returns the snapshot wrapped in Option for consistency with daemon protocol.
 pub fn cr_latest(
     store: &SnapshotStore,
     project_path: &str,
@@ -73,6 +74,7 @@ pub fn cr_get(
 ///
 /// If store is unavailable, returns Err.
 /// If capture is skipped (dedup/rate-limit), returns Ok(None).
+/// Returns the snapshot wrapped in Option to distinguish between skipped (None) and error.
 pub fn cr_capture_now(
     capture_service: &CaptureService,
     project_path: &str,
@@ -599,5 +601,56 @@ mod tests {
         // cr_delete_project returns Err
         let result = cr_delete_project(&store, "/tmp/TODO.md");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cr_list_limit_none_returns_up_to_default() {
+        let temp_dir = TempDir::new().unwrap();
+        let store = SnapshotStore::new(temp_dir.path());
+        let project_path = temp_dir.path().join("TODO.md");
+        std::fs::write(&project_path, "# TODO\n").unwrap();
+
+        // Create 5 snapshots
+        for i in 1..=5 {
+            let snapshot = ContextSnapshotV1::new(
+                format!("2026-02-07T10:{:02}:00Z_lim.limit-none", i),
+                project_path.to_string_lossy().to_string(),
+                "lim.limit-none".to_string(),
+                "Limit none".to_string(),
+                format!("2026-02-07T10:{:02}:00Z", i),
+                CaptureReason::Manual,
+            );
+            store
+                .write_snapshot(&project_path, "lim.limit-none", &snapshot)
+                .unwrap();
+        }
+
+        // Query with limit=None should return all (since we have fewer than default)
+        let result = cr_list(
+            &store,
+            project_path.to_str().unwrap(),
+            "lim.limit-none",
+            None,
+        )
+        .expect("Should succeed");
+
+        assert_eq!(result.len(), 5);
+    }
+
+    #[test]
+    fn test_cr_list_limit_zero_handled_by_caller() {
+        // Note: The daemon layer enforces limit > 0, but the query layer
+        // passes through whatever it receives. This test just documents
+        // that the query layer doesn't panic on 0.
+        let temp_dir = TempDir::new().unwrap();
+        let store = SnapshotStore::new(temp_dir.path());
+        let project_path = temp_dir.path().join("TODO.md");
+        std::fs::write(&project_path, "# TODO\n").unwrap();
+
+        // Query with limit=0 returns empty (store.list_snapshots clamps to 0)
+        let result = cr_list(&store, project_path.to_str().unwrap(), "task", Some(0))
+            .expect("Should succeed");
+
+        assert_eq!(result.len(), 0);
     }
 }

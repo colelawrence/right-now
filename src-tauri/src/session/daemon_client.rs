@@ -103,7 +103,85 @@ pub fn send_request(request: DaemonRequest) -> Result<DaemonResponse> {
         return Err(e.into());
     }
 
-    // Send the request
+    // Perform protocol handshake first
+    {
+        use super::protocol::PROTOCOL_VERSION;
+
+        let handshake = DaemonRequest::Handshake {
+            client_version: PROTOCOL_VERSION,
+        };
+        let handshake_bytes = match serialize_message(&handshake) {
+            Ok(b) => b,
+            Err(e) if is_cr_request => {
+                return Ok(DaemonResponse::Error {
+                    code: DaemonErrorCode::Internal,
+                    message: format!("Failed to serialize handshake: {}", e),
+                });
+            }
+            Err(e) => return Err(e.into()),
+        };
+
+        if let Err(e) = stream.write_all(&handshake_bytes) {
+            if is_cr_request {
+                return Ok(DaemonResponse::Error {
+                    code: DaemonErrorCode::DaemonUnavailable,
+                    message: format!("Failed to send handshake: {}", e),
+                });
+            }
+            return Err(e.into());
+        }
+
+        if let Err(e) = stream.flush() {
+            if is_cr_request {
+                return Ok(DaemonResponse::Error {
+                    code: DaemonErrorCode::DaemonUnavailable,
+                    message: format!("Failed to flush handshake: {}", e),
+                });
+            }
+            return Err(e.into());
+        }
+
+        // Read handshake response
+        let handshake_response = match read_response(&mut stream, is_cr_request) {
+            Ok(r) => r,
+            Err(e) => {
+                if is_cr_request {
+                    return Ok(DaemonResponse::Error {
+                        code: DaemonErrorCode::DaemonUnavailable,
+                        message: format!("Handshake failed: {}", e),
+                    });
+                }
+                return Err(e);
+            }
+        };
+
+        // Check for version mismatch
+        match handshake_response {
+            DaemonResponse::Handshake {
+                protocol_version: _,
+            } => {
+                // Handshake successful
+            }
+            DaemonResponse::Error { code, message } if code == DaemonErrorCode::VersionMismatch => {
+                if is_cr_request {
+                    return Ok(DaemonResponse::Error { code, message });
+                }
+                return Err(anyhow::anyhow!("Protocol version mismatch: {}", message));
+            }
+            other => {
+                let msg = format!("Expected handshake response, got: {:?}", other);
+                if is_cr_request {
+                    return Ok(DaemonResponse::Error {
+                        code: DaemonErrorCode::Internal,
+                        message: msg,
+                    });
+                }
+                return Err(anyhow::anyhow!(msg));
+            }
+        }
+    }
+
+    // Send the actual request
     let request_bytes = match serialize_message(&request) {
         Ok(b) => b,
         Err(e) if is_cr_request => {
@@ -135,7 +213,21 @@ pub fn send_request(request: DaemonRequest) -> Result<DaemonResponse> {
         return Err(e.into());
     }
 
-    // Read response, skipping any notification messages
+    // Read response
+    match read_response(&mut stream, is_cr_request) {
+        Ok(r) => Ok(r),
+        Err(e) if is_cr_request => Ok(DaemonResponse::Error {
+            code: DaemonErrorCode::DaemonUnavailable,
+            message: format!("Failed to read response: {}", e),
+        }),
+        Err(e) => Err(e),
+    }
+}
+
+/// Helper to read a response from the daemon, enforcing frame size limits
+fn read_response(stream: &mut UnixStream, is_cr_request: bool) -> Result<DaemonResponse> {
+    use super::protocol::{DaemonErrorCode, MAX_RESPONSE_FRAME_SIZE};
+
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
 
@@ -151,7 +243,26 @@ pub fn send_request(request: DaemonRequest) -> Result<DaemonResponse> {
                 }
                 return Err(anyhow::anyhow!("Daemon closed connection unexpectedly"));
             }
-            Ok(_) => {}
+            Ok(_) => {
+                // Enforce max response frame size (10MB)
+                if line.len() > MAX_RESPONSE_FRAME_SIZE {
+                    if is_cr_request {
+                        return Ok(DaemonResponse::Error {
+                            code: DaemonErrorCode::Internal,
+                            message: format!(
+                                "Response frame too large: {} bytes (max {})",
+                                line.len(),
+                                MAX_RESPONSE_FRAME_SIZE
+                            ),
+                        });
+                    }
+                    return Err(anyhow::anyhow!(
+                        "Response frame too large: {} bytes (max {})",
+                        line.len(),
+                        MAX_RESPONSE_FRAME_SIZE
+                    ));
+                }
+            }
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
                 if is_cr_request {
                     return Ok(DaemonResponse::Error {

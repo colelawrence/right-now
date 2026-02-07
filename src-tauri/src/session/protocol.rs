@@ -4,6 +4,20 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::context_resurrection::models::ContextSnapshotV1;
+
+/// Protocol version for daemon <-> client communication
+/// Increment when making breaking changes to the protocol
+pub const PROTOCOL_VERSION: u32 = 1;
+
+/// Maximum size for incoming request frames (server-side limit)
+/// Reject frames larger than 1MB to prevent memory exhaustion
+pub const MAX_REQUEST_FRAME_SIZE: usize = 1024 * 1024; // 1 MB
+
+/// Maximum size for incoming response frames (client-side limit)
+/// Reject frames larger than 10MB to prevent memory exhaustion
+pub const MAX_RESPONSE_FRAME_SIZE: usize = 10 * 1024 * 1024; // 10 MB
+
 /// Session status reflecting the current state of a terminal session
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -141,6 +155,11 @@ impl Session {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DaemonRequest {
+    /// Protocol version handshake (must be first request from client)
+    Handshake {
+        /// Client's expected protocol version
+        client_version: u32,
+    },
     /// Start a new session for a task
     Start {
         /// Task name/key to match in the TODO file
@@ -264,12 +283,19 @@ pub enum DaemonErrorCode {
     DaemonUnavailable,
     /// Request timeout
     Timeout,
+    /// Protocol version mismatch between client and daemon
+    VersionMismatch,
 }
 
 /// Response message from daemon to CLI/UI
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DaemonResponse {
+    /// Protocol version handshake acknowledgment
+    Handshake {
+        /// Daemon's protocol version
+        protocol_version: u32,
+    },
     /// Session was started successfully
     SessionStarted { session: Session },
     /// Session was continued (attached)
@@ -308,9 +334,9 @@ pub enum DaemonResponse {
     /// Shutdown acknowledged
     ShuttingDown,
     /// Context Resurrection snapshot (single)
-    CrSnapshot { snapshot: serde_json::Value },
+    CrSnapshot { snapshot: Option<ContextSnapshotV1> },
     /// Context Resurrection snapshots (list)
-    CrSnapshots { snapshots: Vec<serde_json::Value> },
+    CrSnapshots { snapshots: Vec<ContextSnapshotV1> },
     /// Context Resurrection deletion result
     CrDeleted { deleted_count: usize },
     /// Error response with structured code

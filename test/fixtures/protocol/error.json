@@ -1,0 +1,5 @@
+{
+  "type": "error",
+  "code": "not_found",
+  "message": "Snapshot not found"
+}

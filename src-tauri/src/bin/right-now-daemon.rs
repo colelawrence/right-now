@@ -560,15 +560,28 @@ async fn handle_client(
                         break;
                     }
                     Ok(_) => {
-                        let response = match deserialize_message::<DaemonRequest>(line.as_bytes()) {
-                            Ok(request) => {
-                                handle_request(&state, request, &shutdown_tx).await
+                        use rn_desktop_2_lib::session::protocol::{DaemonErrorCode, MAX_REQUEST_FRAME_SIZE};
+
+                        // Enforce max request frame size (1MB)
+                        let response = if line.len() > MAX_REQUEST_FRAME_SIZE {
+                            DaemonResponse::Error {
+                                code: DaemonErrorCode::InvalidRequest,
+                                message: format!(
+                                    "Request frame too large: {} bytes (max {})",
+                                    line.len(),
+                                    MAX_REQUEST_FRAME_SIZE
+                                ),
                             }
-                            Err(e) => {
-                                use rn_desktop_2_lib::session::protocol::DaemonErrorCode;
-                                DaemonResponse::Error {
-                                    code: DaemonErrorCode::InvalidRequest,
-                                    message: format!("Failed to parse request: {}", e),
+                        } else {
+                            match deserialize_message::<DaemonRequest>(line.as_bytes()) {
+                                Ok(request) => {
+                                    handle_request(&state, request, &shutdown_tx).await
+                                }
+                                Err(e) => {
+                                    DaemonResponse::Error {
+                                        code: DaemonErrorCode::InvalidRequest,
+                                        message: format!("Failed to parse request: {}", e),
+                                    }
                                 }
                             }
                         };
@@ -618,9 +631,26 @@ async fn handle_request(
     request: DaemonRequest,
     shutdown_tx: &tokio::sync::mpsc::Sender<()>,
 ) -> DaemonResponse {
-    use rn_desktop_2_lib::session::protocol::DaemonErrorCode;
+    use rn_desktop_2_lib::session::protocol::{DaemonErrorCode, PROTOCOL_VERSION};
 
     match request {
+        DaemonRequest::Handshake { client_version } => {
+            if client_version != PROTOCOL_VERSION {
+                let message = if client_version < PROTOCOL_VERSION {
+                    "Daemon is newer than app—please update the app.".to_string()
+                } else {
+                    "Daemon is outdated—please restart daemon.".to_string()
+                };
+                return DaemonResponse::Error {
+                    code: DaemonErrorCode::VersionMismatch,
+                    message,
+                };
+            }
+            DaemonResponse::Handshake {
+                protocol_version: PROTOCOL_VERSION,
+            }
+        }
+
         DaemonRequest::Ping => DaemonResponse::Pong,
 
         DaemonRequest::Shutdown => {
@@ -965,13 +995,7 @@ async fn handle_request(
             use rn_desktop_2_lib::session::protocol::DaemonErrorCode;
 
             match query::cr_latest(&state.snapshot_store, &project_path, task_id.as_deref()) {
-                Ok(Some(snapshot)) => DaemonResponse::CrSnapshot {
-                    snapshot: serde_json::to_value(&snapshot).unwrap_or(serde_json::Value::Null),
-                },
-                Ok(None) => DaemonResponse::Error {
-                    code: DaemonErrorCode::NotFound,
-                    message: "No snapshots found".to_string(),
-                },
+                Ok(snapshot) => DaemonResponse::CrSnapshot { snapshot },
                 Err(e) => DaemonResponse::Error {
                     code: DaemonErrorCode::Internal,
                     message: e,
@@ -987,14 +1011,26 @@ async fn handle_request(
             use rn_desktop_2_lib::context_resurrection::query;
             use rn_desktop_2_lib::session::protocol::DaemonErrorCode;
 
-            match query::cr_list(&state.snapshot_store, &project_path, &task_id, limit) {
-                Ok(snapshots) => {
-                    let values: Vec<serde_json::Value> = snapshots
-                        .into_iter()
-                        .map(|s| serde_json::to_value(&s).unwrap_or(serde_json::Value::Null))
-                        .collect();
-                    DaemonResponse::CrSnapshots { snapshots: values }
+            // Enforce limit semantics: None => 100, >500 => 500, <=0 => error
+            let enforced_limit = match limit {
+                None => Some(100),
+                Some(n) if n <= 0 => {
+                    return DaemonResponse::Error {
+                        code: DaemonErrorCode::InvalidRequest,
+                        message: "limit must be greater than 0".to_string(),
+                    };
                 }
+                Some(n) if n > 500 => Some(500),
+                Some(n) => Some(n),
+            };
+
+            match query::cr_list(
+                &state.snapshot_store,
+                &project_path,
+                &task_id,
+                enforced_limit,
+            ) {
+                Ok(snapshots) => DaemonResponse::CrSnapshots { snapshots },
                 Err(e) => DaemonResponse::Error {
                     code: DaemonErrorCode::Internal,
                     message: e,
@@ -1021,8 +1057,7 @@ async fn handle_request(
                     .read_snapshot(project, &task_id, &snapshot_id)
                 {
                     Ok(snapshot) => DaemonResponse::CrSnapshot {
-                        snapshot: serde_json::to_value(&snapshot)
-                            .unwrap_or(serde_json::Value::Null),
+                        snapshot: Some(snapshot),
                     },
                     Err(e) => {
                         let code = if e.kind() == std::io::ErrorKind::NotFound {
@@ -1076,8 +1111,7 @@ async fn handle_request(
                         user_note,
                     ) {
                         Ok(Some(snapshot)) => DaemonResponse::CrSnapshot {
-                            snapshot: serde_json::to_value(&snapshot)
-                                .unwrap_or(serde_json::Value::Null),
+                            snapshot: Some(snapshot),
                         },
                         Ok(None) => DaemonResponse::Error {
                             code: DaemonErrorCode::Skipped,
@@ -2446,13 +2480,9 @@ mod tests {
         let capture_response = handle_request(&state, capture_request, &shutdown_tx).await;
         match &capture_response {
             DaemonResponse::CrSnapshot { snapshot } => {
-                assert!(snapshot.is_object());
-                let obj = snapshot.as_object().unwrap();
-                assert_eq!(obj.get("task_id").unwrap().as_str(), Some("test.test-task"));
-                assert_eq!(
-                    obj.get("user_note").unwrap().as_str(),
-                    Some("Manual test capture")
-                );
+                let snap = snapshot.as_ref().expect("Expected snapshot to be Some");
+                assert_eq!(snap.task_id, "test.test-task");
+                assert_eq!(snap.user_note.as_deref(), Some("Manual test capture"));
             }
             DaemonResponse::Error { code: _, message } => {
                 panic!("CrCaptureNow failed: {}", message);
@@ -2469,9 +2499,8 @@ mod tests {
         let latest_response = handle_request(&state, latest_request, &shutdown_tx).await;
         match &latest_response {
             DaemonResponse::CrSnapshot { snapshot } => {
-                assert!(snapshot.is_object());
-                let obj = snapshot.as_object().unwrap();
-                assert_eq!(obj.get("task_id").unwrap().as_str(), Some("test.test-task"));
+                let snap = snapshot.as_ref().expect("Expected snapshot to be Some");
+                assert_eq!(snap.task_id, "test.test-task");
             }
             DaemonResponse::Error { code: _, message } => {
                 panic!("CrLatest failed: {}", message);
@@ -2491,9 +2520,7 @@ mod tests {
             DaemonResponse::CrSnapshots { snapshots } => {
                 assert_eq!(snapshots.len(), 1);
                 let snapshot = &snapshots[0];
-                assert!(snapshot.is_object());
-                let obj = snapshot.as_object().unwrap();
-                assert_eq!(obj.get("task_id").unwrap().as_str(), Some("test.test-task"));
+                assert_eq!(snapshot.task_id, "test.test-task");
             }
             DaemonResponse::Error { code: _, message } => {
                 panic!("CrList failed: {}", message);

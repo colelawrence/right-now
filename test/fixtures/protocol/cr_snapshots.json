@@ -1,0 +1,30 @@
+{
+  "type": "cr_snapshots",
+  "snapshots": [
+    {
+      "id": "2026-02-07T11:00:00Z_abc.test-task",
+      "version": 1,
+      "project_path": "/Users/test/projects/app/TODO.md",
+      "task_id": "abc.test-task",
+      "task_title_at_capture": "Implement feature X",
+      "captured_at": "2026-02-07T11:00:00Z",
+      "capture_reason": "manual",
+      "user_note": "Before refactoring"
+    },
+    {
+      "id": "2026-02-07T10:30:00Z_abc.test-task",
+      "version": 1,
+      "project_path": "/Users/test/projects/app/TODO.md",
+      "task_id": "abc.test-task",
+      "task_title_at_capture": "Implement feature X",
+      "captured_at": "2026-02-07T10:30:00Z",
+      "capture_reason": "session_stopped",
+      "terminal": {
+        "session_id": 42,
+        "status": "Stopped",
+        "exit_code": 0,
+        "tail_inline": "Build completed successfully\n"
+      }
+    }
+  ]
+}

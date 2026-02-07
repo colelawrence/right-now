@@ -118,7 +118,8 @@ export type DaemonErrorCode =
   | "store_unavailable"
   | "internal"
   | "daemon_unavailable"
-  | "timeout";
+  | "timeout"
+  | "version_mismatch";
 
 export type DaemonErrorResponse = {
   type: "error";

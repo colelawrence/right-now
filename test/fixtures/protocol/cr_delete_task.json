@@ -1,0 +1,5 @@
+{
+  "type": "cr_delete_task",
+  "project_path": "/Users/test/projects/app/TODO.md",
+  "task_id": "abc.test-task"
+}
