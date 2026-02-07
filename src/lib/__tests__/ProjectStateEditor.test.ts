@@ -937,6 +937,172 @@ right_now:
     });
   });
 
+  describe("active task ID persistence", () => {
+    it("should parse active_task_id from frontmatter", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+right_now:
+  active_task_id: abc.my-task
+---
+- [ ] My task [abc.my-task]
+- [ ] Another task [def.another-task]
+`;
+      const parsed = ProjectStateEditor.parse(content);
+
+      expect(parsed.activeTaskId).toBe("abc.my-task");
+    });
+
+    it("should handle missing active_task_id gracefully", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+---
+- [ ] Task 1
+`;
+      const parsed = ProjectStateEditor.parse(content);
+
+      expect(parsed.activeTaskId).toBeUndefined();
+    });
+
+    it("should write active_task_id to frontmatter", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+---
+- [ ] Task 1 [abc.task-1]
+- [ ] Task 2 [def.task-2]
+`;
+      const parsed = ProjectStateEditor.parse(content);
+
+      parsed.activeTaskId = "abc.task-1";
+
+      const updated = ProjectStateEditor.update(content, parsed);
+
+      expect(updated).toContain("active_task_id: abc.task-1");
+    });
+
+    it("should preserve active_task_id during round-trip", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+right_now:
+  active_task_id: abc.my-task
+  work_state: working
+---
+- [ ] My task [abc.my-task]
+`;
+      const parsed = ProjectStateEditor.parse(content);
+      const updated = ProjectStateEditor.update(content, parsed);
+
+      const reparsed = ProjectStateEditor.parse(updated);
+      expect(reparsed.activeTaskId).toBe("abc.my-task");
+    });
+
+    it("should update active_task_id independently of other fields", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+right_now:
+  work_state: planning
+  active_task_id: abc.old-task
+---
+- [ ] Old task [abc.old-task]
+- [ ] New task [def.new-task]
+`;
+      const parsed = ProjectStateEditor.parse(content);
+
+      // Update only active task ID
+      parsed.activeTaskId = "def.new-task";
+
+      const updated = ProjectStateEditor.update(content, parsed);
+
+      // Pomodoro settings should be unchanged
+      expect(updated).toContain("work_duration: 25");
+      expect(updated).toContain("break_duration: 5");
+
+      // Work state should be unchanged
+      expect(updated).toContain("work_state: planning");
+
+      // Active task ID should be updated
+      expect(updated).toContain("active_task_id: def.new-task");
+
+      // Body should be unchanged
+      expect(updated).toContain("- [ ] Old task [abc.old-task]");
+      expect(updated).toContain("- [ ] New task [def.new-task]");
+    });
+
+    it("should not clear active_task_id when updating work state", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+right_now:
+  work_state: planning
+  active_task_id: abc.my-task
+---
+- [ ] My task [abc.my-task]
+`;
+      const parsed = ProjectStateEditor.parse(content);
+
+      // Update only work state
+      parsed.workState = "working";
+      parsed.stateTransitions = {
+        startedAt: 1609459200000,
+        endsAt: 1609460700000,
+      };
+
+      const updated = ProjectStateEditor.update(content, parsed);
+
+      // Active task ID should be preserved
+      expect(updated).toContain("active_task_id: abc.my-task");
+      expect(updated).toContain("work_state: working");
+    });
+
+    it("should handle invalid active_task_id type gracefully", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+right_now:
+  active_task_id: 123
+---
+- [ ] Task 1
+`;
+      const parsed = ProjectStateEditor.parse(content);
+
+      // Invalid type should result in undefined (not parse as number)
+      expect(parsed.activeTaskId).toBeUndefined();
+    });
+
+    it("should preserve active_task_id when not explicitly set", () => {
+      const content = `---
+pomodoro_settings:
+  work_duration: 25
+  break_duration: 5
+right_now:
+  active_task_id: abc.my-task
+---
+- [ ] My task [abc.my-task]
+`;
+      const parsed = ProjectStateEditor.parse(content);
+
+      // Don't modify activeTaskId, just update another field
+      parsed.pomodoroSettings.workDuration = 30;
+
+      const updated = ProjectStateEditor.update(content, parsed);
+
+      // Active task ID should be preserved
+      const reparsed = ProjectStateEditor.parse(updated);
+      expect(reparsed.activeTaskId).toBe("abc.my-task");
+    });
+  });
+
   describe("moveHeadingSection", () => {
     const sampleContent = `---
 pomodoro_settings:

@@ -134,6 +134,7 @@ export interface ProjectFile {
     startedAt: number;
     endsAt?: number;
   };
+  activeTaskId?: string;
   markdown: ProjectMarkdown[];
 }
 
@@ -309,6 +310,8 @@ export namespace ProjectStateEditor {
                 : undefined,
           }
         : undefined,
+      // Parse active task ID from namespaced frontmatter (right_now)
+      activeTaskId: typeof front.right_now?.active_task_id === "string" ? front.right_now.active_task_id : undefined,
       // 3. Parse the body into structured blocks
       markdown: parseBody(file.content),
     };
@@ -333,7 +336,7 @@ export namespace ProjectStateEditor {
     front.pomodoro_settings.break_duration = state.pomodoroSettings.breakDuration;
 
     // Update timer state in namespaced frontmatter (right_now)
-    if (state.workState !== undefined || state.stateTransitions !== undefined) {
+    if (state.workState !== undefined || state.stateTransitions !== undefined || state.activeTaskId !== undefined) {
       front.right_now = front.right_now || {};
 
       if (state.workState !== undefined) {
@@ -345,6 +348,10 @@ export namespace ProjectStateEditor {
           started_at: state.stateTransitions.startedAt,
           ...(state.stateTransitions.endsAt !== undefined && { ends_at: state.stateTransitions.endsAt }),
         };
+      }
+
+      if (state.activeTaskId !== undefined) {
+        front.right_now.active_task_id = state.activeTaskId;
       }
     }
 

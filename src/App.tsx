@@ -551,6 +551,9 @@ function AppPlanner({
           onMoveHeadingSection={async (headingIndex, direction) => {
             await projectManager.moveHeadingSection(headingIndex, direction);
           }}
+          onSetActiveTask={async (taskId) => {
+            await projectManager.setActiveTask(taskId);
+          }}
           projectFullPath={loaded?.fullPath}
         />
         {sessionsDebugEnabled && showSessionsDebug && <SessionsDebugPanel />}

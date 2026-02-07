@@ -70,7 +70,13 @@ async function initializeApp() {
 
       // Find current task and its context
       const tasks = projectFile.markdown?.filter((a): a is typeof a & { type: "task" } => a.type === "task") ?? [];
-      const currentTask = tasks.find((t) => !t.complete);
+
+      // Use activeTaskId if set and valid; otherwise fallback to first incomplete task
+      let currentTask = projectFile.activeTaskId ? tasks.find((t) => t.taskId === projectFile.activeTaskId) : undefined;
+
+      if (!currentTask) {
+        currentTask = tasks.find((t) => !t.complete);
+      }
 
       // Find the last heading before the current task
       let currentHeading: string | undefined;

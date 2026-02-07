@@ -18,10 +18,17 @@ interface TaskListProps {
   tasks: ProjectMarkdown[];
   onCompleteTask: (task: ProjectMarkdown & { type: "task" }) => void;
   onMoveHeadingSection?: (headingIndex: number, direction: "up" | "down") => void;
+  onSetActiveTask?: (taskId: string | undefined) => Promise<void>;
   projectFullPath?: string;
 }
 
-export function TaskList({ tasks, onCompleteTask, onMoveHeadingSection, projectFullPath }: TaskListProps) {
+export function TaskList({
+  tasks,
+  onCompleteTask,
+  onMoveHeadingSection,
+  onSetActiveTask,
+  projectFullPath,
+}: TaskListProps) {
   const sessionClient = new SessionClient();
   const [showSessionsPanel, setShowSessionsPanel] = useState(false);
 
@@ -79,6 +86,7 @@ export function TaskList({ tasks, onCompleteTask, onMoveHeadingSection, projectF
                     task={item}
                     onCompleteTask={onCompleteTask}
                     sessionClient={sessionClient}
+                    onSetActiveTask={onSetActiveTask}
                     projectFullPath={projectFullPath}
                   />
                 );
@@ -137,10 +145,11 @@ interface TaskRowProps {
   task: ProjectMarkdown & { type: "task" };
   onCompleteTask: (task: ProjectMarkdown & { type: "task" }) => void;
   sessionClient: SessionClient;
+  onSetActiveTask?: (taskId: string | undefined) => Promise<void>;
   projectFullPath?: string;
 }
 
-function TaskRow({ task, onCompleteTask, sessionClient, projectFullPath }: TaskRowProps) {
+function TaskRow({ task, onCompleteTask, sessionClient, onSetActiveTask, projectFullPath }: TaskRowProps) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [isActing, setIsActing] = useState(false);
 
@@ -153,6 +162,11 @@ function TaskRow({ task, onCompleteTask, sessionClient, projectFullPath }: TaskR
     setActionError(null);
     setIsActing(true);
     try {
+      // Update active task ID first (before daemon adds session badge)
+      if (onSetActiveTask && task.taskId) {
+        await onSetActiveTask(task.taskId);
+      }
+
       await sessionClient.startSession(task.name, projectFullPath, task.taskId ?? undefined);
       // Session badge will be added by daemon; file watcher will reload
     } catch (error) {

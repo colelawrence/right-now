@@ -390,6 +390,28 @@ pomodoro_settings:
     });
   }
 
+  async setActiveTask(taskId: string | undefined): Promise<void> {
+    return await this.enqueueOp(async () => {
+      if (!this.currentFile) return;
+
+      // Update in-memory state
+      this.currentFile = {
+        ...this.currentFile,
+        projectFile: {
+          ...this.currentFile.projectFile,
+          activeTaskId: taskId,
+        },
+      };
+
+      await this.notifySubscribers(this.currentFile);
+
+      // Persist to file
+      await this.updateProjectImpl((draft) => {
+        draft.activeTaskId = taskId;
+      });
+    });
+  }
+
   /**
    * Move a heading section (heading + all content until next heading) up or down.
    * Uses ProjectStateEditor.moveHeadingSection() under the hood.

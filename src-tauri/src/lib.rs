@@ -17,6 +17,9 @@ pub mod session;
 // CLI paths configuration (shared between app, shim, and daemon)
 pub mod cli_paths;
 
+// Context resurrection module (snapshot capture + storage + query)
+pub mod context_resurrection;
+
 // Test harness module (only compiled with test-harness feature)
 #[cfg(feature = "test-harness")]
 pub mod test_harness;
