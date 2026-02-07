@@ -5,3 +5,5 @@ export * from "./load";
 export * from "./tauri";
 export * from "./note";
 export * from "./forget";
+export * from "./controller";
+export * from "./use-cr-controller";

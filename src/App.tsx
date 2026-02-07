@@ -20,12 +20,10 @@ import {
   SessionClient,
   copyTodoFilePath,
   createTauriCrTransport,
-  forgetProjectContext,
-  forgetTaskContext,
   formatDisplayPath,
-  loadResurrectionState,
   openTodoFile,
   revealTodoFile,
+  useCrController,
   useDeepLink,
 } from "./lib";
 import { type ProjectMarkdown, type TaskBlock, ensureTaskId } from "./lib/ProjectStateEditor";
@@ -118,11 +116,14 @@ function AppReady({ controllers, startupWarning }: { controllers: AppControllers
   const crClient = useMemo(() => new CrClient(createTauriCrTransport()), []);
   const sessionClient = useMemo(() => new SessionClient(), []);
 
-  const [crDaemonUnavailable, setCrDaemonUnavailable] = useState(false);
-  const [crTaskHasContext, setCrTaskHasContext] = useState<Record<string, boolean>>({});
-  const [crCardSnapshot, setCrCardSnapshot] = useState<ContextSnapshotV1 | null>(null);
-  const [crCardPinned, setCrCardPinned] = useState(false);
-  const [crDismissedSnapshotId, setCrDismissedSnapshotId] = useState<string | null>(null);
+  // Context Resurrection controller
+  const crController = useCrController({
+    crClient,
+    sessionClient,
+    onActiveTaskChange: async (taskId: string) => {
+      await projectManager.setActiveTask(taskId);
+    },
+  });
 
   // Check if user has seen walkthrough on mount
   useEffect(() => {
@@ -181,56 +182,24 @@ function AppReady({ controllers, startupWarning }: { controllers: AppControllers
 
   // Reset ephemeral card state when switching projects
   useEffect(() => {
-    setCrCardPinned(false);
-    setCrCardSnapshot(null);
-    setCrDismissedSnapshotId(null);
-    setCrTaskHasContext({});
-    setCrDaemonUnavailable(false);
-  }, [loaded?.fullPath]);
+    crController.actions.resetForProject();
+  }, [loaded?.fullPath, crController.actions]);
 
   // Load context resurrection state on project changes / edits.
   useEffect(() => {
     if (!loaded) return;
 
-    let cancelled = false;
-
-    loadResurrectionState({
-      client: crClient,
+    crController.actions.load({
       projectPath: loaded.fullPath,
       activeTaskId: loaded.projectFile.activeTaskId,
       tasks: resurrectionTasks,
-    })
-      .then((result) => {
-        if (cancelled) return;
-
-        setCrDaemonUnavailable(result.daemonUnavailable);
-        setCrTaskHasContext(result.taskHasContext);
-
-        if (crCardPinned) return;
-
-        const nextSnapshot = result.selected?.snapshot ?? null;
-        if (nextSnapshot && nextSnapshot.id === crDismissedSnapshotId) {
-          setCrCardSnapshot(null);
-        } else {
-          setCrCardSnapshot(nextSnapshot);
-        }
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        console.error("Failed to load resurrection state:", error);
-      });
-
-    return () => {
-      cancelled = true;
-    };
+    });
   }, [
     loaded?.fullPath,
     loaded?.textContent,
     loaded?.projectFile.activeTaskId,
-    crClient,
-    crCardPinned,
-    crDismissedSnapshotId,
     resurrectionTasks,
+    crController.actions,
   ]);
 
   const handleCompleteTask = (task: ProjectMarkdown & { type: "task" }, draft: ProjectFile) => {
@@ -313,149 +282,59 @@ function AppReady({ controllers, startupWarning }: { controllers: AppControllers
   };
 
   const handleDismissResurrectionCard = () => {
-    if (crCardSnapshot) {
-      setCrDismissedSnapshotId(crCardSnapshot.id);
-    }
-    setCrCardSnapshot(null);
-    setCrCardPinned(false);
+    crController.actions.dismissCard();
   };
 
   const handleOpenResurrectionForTask = async (taskId: string) => {
     if (!loaded) return;
 
-    // Pin the card so the auto-load effect doesn't immediately replace it.
-    setCrCardPinned(true);
-
-    // Update the active-task pointer (best effort).
-    await projectManager.setActiveTask(taskId);
-
-    const latest = await crClient.latest(loaded.fullPath, taskId);
-    if (!latest.ok) {
-      if (latest.error.type === "daemon_unavailable") {
-        setCrDaemonUnavailable(true);
-        alert("Context Resurrection is unavailable (daemon not running)");
-      } else {
-        alert(`Failed to load snapshot: ${"message" in latest.error ? latest.error.message : latest.error.type}`);
-      }
-      return;
+    try {
+      await crController.actions.openForTask(loaded.fullPath, taskId);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : String(error));
     }
-
-    if (!latest.value) {
-      alert("No snapshots found for this task");
-      setCrCardSnapshot(null);
-      return;
-    }
-
-    setCrCardSnapshot(latest.value);
-    setCrDismissedSnapshotId(null);
   };
 
   const handleResumeFromResurrectionCard = async (snapshot: ContextSnapshotV1) => {
     if (!loaded) return;
 
-    // Ensure the active task pointer is set.
-    await projectManager.setActiveTask(snapshot.task_id);
-
     try {
-      const terminal = snapshot.terminal;
-
-      // If the session is still running/waiting, attach/continue.
-      if (terminal && terminal.status !== "Stopped") {
-        const result = await sessionClient.continueSession(terminal.session_id, 512);
-        const tail = SessionClient.tailBytesToString(result.tail);
-        if (tail) {
-          alert(`Session output (last 512 bytes):\n\n${tail}`);
-        } else {
-          alert(`Session ${terminal.session_id} continued (no recent output)`);
-        }
-      } else {
-        // Otherwise, start a new session. Use task_id as the key so the daemon matches by stable ID.
-        await sessionClient.startSession(snapshot.task_id, loaded.fullPath, snapshot.task_id);
-      }
-
-      // Hide the card after resuming.
-      setCrCardSnapshot(null);
-      setCrCardPinned(false);
+      await crController.actions.resume(loaded.fullPath, snapshot);
     } catch (error) {
-      console.error("Failed to resume from snapshot:", error);
       alert(error instanceof Error ? error.message : String(error));
     }
   };
 
   const handleSaveResurrectionNote = async (note: string) => {
-    if (!loaded || !crCardSnapshot) return;
+    if (!loaded) return;
 
-    const captured = await crClient.captureNow(loaded.fullPath, crCardSnapshot.task_id, note);
-
-    if (!captured.ok) {
-      if (captured.error.type === "daemon_unavailable") {
-        setCrDaemonUnavailable(true);
-        throw new Error("Context Resurrection is unavailable (daemon not running)");
-      }
-
-      throw new Error(captured.error.message ?? captured.error.type);
-    }
-
-    if (!captured.value) {
-      throw new Error("Capture was skipped (dedup/rate-limit)");
-    }
-
-    // Update UI state immediately (snapshot store changes are not watched by the UI).
-    setCrTaskHasContext((prev) => ({ ...prev, [captured.value!.task_id]: true }));
-    setCrCardPinned(true);
-    setCrDismissedSnapshotId(null);
-    setCrCardSnapshot(captured.value);
+    await crController.actions.saveNote(loaded.fullPath, note);
   };
 
   const handleForgetTaskContext = async () => {
-    if (!loaded || !crCardSnapshot) return;
+    if (!loaded) return;
 
-    const taskId = crCardSnapshot.task_id;
-    const confirmed = confirm(
-      `Forget this task's context?\n\nThis deletes all stored snapshots for:\n${crCardSnapshot.task_title_at_capture}`,
-    );
-    if (!confirmed) return;
-
-    const res = await forgetTaskContext(crClient, loaded.fullPath, taskId, crTaskHasContext);
-
-    if (!res.ok) {
-      if (res.error.type === "daemon_unavailable") {
-        setCrDaemonUnavailable(true);
+    try {
+      const deletedCount = await crController.actions.forgetTask(loaded.fullPath);
+      if (deletedCount > 0) {
+        alert(`Deleted ${deletedCount} snapshots for this task.`);
       }
-      alert(res.error.message ?? res.error.type);
-      return;
+    } catch (error) {
+      alert(error instanceof Error ? error.message : String(error));
     }
-
-    setCrTaskHasContext(res.value.next);
-    setCrCardSnapshot(null);
-    setCrCardPinned(false);
-    setCrDismissedSnapshotId(null);
-
-    alert(`Deleted ${res.value.deletedCount} snapshots for this task.`);
   };
 
   const handleForgetProjectContext = async () => {
     if (!loaded) return;
 
-    const confirmed = confirm("Forget project context?\n\nThis deletes ALL stored snapshots for this project.");
-    if (!confirmed) return;
-
-    const res = await forgetProjectContext(crClient, loaded.fullPath);
-
-    if (!res.ok) {
-      if (res.error.type === "daemon_unavailable") {
-        setCrDaemonUnavailable(true);
+    try {
+      const deletedCount = await crController.actions.forgetProject(loaded.fullPath);
+      if (deletedCount > 0) {
+        alert(`Deleted ${deletedCount} snapshots for this project.`);
       }
-      alert(res.error.message ?? res.error.type);
-      return;
+    } catch (error) {
+      alert(error instanceof Error ? error.message : String(error));
     }
-
-    setCrTaskHasContext(res.value.next);
-    setCrCardSnapshot(null);
-    setCrCardPinned(false);
-    setCrDismissedSnapshotId(null);
-
-    alert(`Deleted ${res.value.deletedCount} snapshots for this project.`);
   };
 
   // If no project is loaded, show the choose project UI
@@ -496,9 +375,9 @@ function AppReady({ controllers, startupWarning }: { controllers: AppControllers
     projectManager,
 
     // Context Resurrection integration
-    crDaemonUnavailable,
-    crTaskHasContext,
-    crCardSnapshot,
+    crDaemonUnavailable: crController.state.daemonUnavailable,
+    crTaskHasContext: crController.state.taskHasContext,
+    crCardSnapshot: crController.state.cardSnapshot,
     onDismissResurrectionCard: handleDismissResurrectionCard,
     onOpenResurrectionForTask: handleOpenResurrectionForTask,
     onResumeResurrectionCard: handleResumeFromResurrectionCard,
