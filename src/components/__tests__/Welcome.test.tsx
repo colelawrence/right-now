@@ -29,7 +29,7 @@ describe("Welcome component", () => {
     expect(html).toContain("Welcome to Right Now");
   });
 
-  it("renders Open File and Open Folder buttons", () => {
+  it("renders Open File button", () => {
     const projectManager = createMockProjectManager();
     const projectStore = createMockProjectStore();
 
@@ -38,7 +38,8 @@ describe("Welcome component", () => {
     );
 
     expect(html).toContain("Open File...");
-    expect(html).toContain("Open Folder...");
+    // Open Folder is now available via the dropdown menu, not as a separate button.
+    expect(html).not.toContain("Open Folder...");
   });
 
   it("renders startup warning when provided", () => {

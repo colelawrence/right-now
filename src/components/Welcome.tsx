@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ProjectManager, ProjectStore } from "../lib";
+import { OpenProjectSplitButton } from "./OpenProjectSplitButton";
 
 interface StartupWarning {
   message: string;
@@ -79,18 +80,7 @@ export function Welcome({ projectManager, projectStore, startupWarning, onShowWa
       )}
 
       <div className="flex gap-3">
-        <button
-          onClick={handleOpenProject}
-          className="px-5 py-2.5 bg-blue-600 text-white text-sm hover:bg-blue-700 transition-all hover:shadow-md active:scale-95"
-        >
-          Open File...
-        </button>
-        <button
-          onClick={handleOpenFolder}
-          className="px-5 py-2.5 bg-gray-600 text-white text-sm hover:bg-gray-700 transition-all hover:shadow-md active:scale-95"
-        >
-          Open Folder...
-        </button>
+        <OpenProjectSplitButton variant="welcome" onOpenFile={handleOpenProject} onOpenFolder={handleOpenFolder} />
       </div>
 
       <button

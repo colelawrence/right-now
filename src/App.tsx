@@ -2,6 +2,7 @@ import { IconCheck, IconClipboard, IconEdit, IconFolder, IconTerminal } from "@t
 import { Window } from "@tauri-apps/api/window";
 import { useAtom } from "jotai";
 import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
+import { OpenProjectSplitButton } from "./components/OpenProjectSplitButton";
 import { ResurrectionCard } from "./components/ResurrectionCard";
 import { SessionsDebugPanel } from "./components/SessionsDebugPanel";
 import { StateControls } from "./components/StateControls";
@@ -604,7 +605,7 @@ function AppPlanner({
   return (
     <main className="h-screen flex flex-col bg-gradient-to-br from-white to-gray-50">
       <header
-        className="flex items-center justify-between border-b border-gray-200 px-4 bg-white/80 gap-4"
+        className="flex items-center justify-between border-b border-gray-200 px-3 bg-white/80 gap-3"
         onMouseDown={(event) => {
           Window.getCurrent().startDragging().catch(console.error);
           event.preventDefault();
@@ -634,7 +635,7 @@ function AppPlanner({
             <>
               <button
                 onClick={() => loaded.fullPath && openTodoFile(loaded.fullPath)}
-                className="text-xs px-3 py-1.5 bg-blue-600 text-white hover:bg-blue-700 transition-colors flex gap-1.5 items-center font-medium"
+                className="text-xs px-2.5 py-1 bg-blue-600 text-white hover:bg-blue-700 transition-colors flex gap-1.5 items-center font-medium rounded-md"
                 title="Open TODO.md in your editor"
               >
                 <span>{formatDisplayPath(loaded.fullPath)}</span>
@@ -642,14 +643,14 @@ function AppPlanner({
               </button>
               <button
                 onClick={() => loaded.fullPath && copyTodoFilePath(loaded.fullPath)}
-                className="text-xs p-1.5 text-gray-600 hover:bg-gray-100 transition-colors"
+                className="text-xs p-1 text-gray-600 hover:bg-gray-100 transition-colors rounded-md"
                 title="Copy file path"
               >
                 <IconClipboard size={14} />
               </button>
               <button
                 onClick={() => loaded.fullPath && revealTodoFile(loaded.fullPath)}
-                className="text-xs p-1.5 text-gray-600 hover:bg-gray-100 transition-colors"
+                className="text-xs p-1 text-gray-600 hover:bg-gray-100 transition-colors rounded-md"
                 title="Reveal in Finder"
               >
                 <IconFolder size={14} />
@@ -657,23 +658,11 @@ function AppPlanner({
             </>
           )}
           <div className="w-px h-4 bg-gray-300 mx-1" />
-          <button
-            onClick={onShowWalkthrough}
-            className="text-xs px-3 py-1.5 text-gray-600 hover:bg-gray-100 transition-colors"
-            title="Show walkthrough"
-            children="?"
-          />
-          <button
-            onClick={onOpenProject}
-            className="text-xs px-3 py-1.5 text-gray-600 hover:bg-gray-100 transition-colors"
-            title="Open TODO file"
-            children="Open File..."
-          />
-          <button
-            onClick={onOpenFolder}
-            className="text-xs px-3 py-1.5 text-gray-600 hover:bg-gray-100 transition-colors"
-            title="Open project folder"
-            children="Open Folder..."
+          <OpenProjectSplitButton
+            variant="header"
+            onOpenFile={onOpenProject}
+            onOpenFolder={onOpenFolder}
+            onShowWalkthrough={onShowWalkthrough}
           />
         </div>
       </header>
