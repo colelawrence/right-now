@@ -59,6 +59,8 @@ struct DaemonState {
     notification_debouncers: Mutex<HashMap<SessionId, NotificationDebouncer>>,
     /// Context Resurrection capture service (optional - graceful degradation if unavailable)
     capture_service: Mutex<Option<CaptureService>>,
+    /// Context Resurrection snapshot store (separate from service for query ops)
+    snapshot_store: SnapshotStore,
 }
 
 struct AttachSocketHandle {
@@ -74,6 +76,9 @@ impl DaemonState {
         // Create broadcast channel for updates
         let (updates_tx, _) = broadcast::channel(100);
 
+        // Initialize snapshot store for CR queries
+        let snapshot_store = SnapshotStore::new(&config.data_dir);
+
         Ok(Self {
             config,
             registry: RwLock::new(registry),
@@ -83,6 +88,7 @@ impl DaemonState {
             attach_listeners: Mutex::new(HashMap::new()),
             notification_debouncers: Mutex::new(HashMap::new()),
             capture_service: Mutex::new(None), // Initialized after Arc::new in main()
+            snapshot_store,
         })
     }
 
@@ -928,6 +934,129 @@ async fn handle_request(
                 None => DaemonResponse::Error {
                     message: format!("Session {} not found", session_id),
                 },
+            }
+        }
+
+        DaemonRequest::CrLatest {
+            project_path,
+            task_id,
+        } => {
+            use rn_desktop_2_lib::context_resurrection::query;
+
+            match query::cr_latest(&state.snapshot_store, &project_path, task_id.as_deref()) {
+                Ok(Some(snapshot)) => DaemonResponse::CrSnapshot {
+                    snapshot: serde_json::to_value(&snapshot).unwrap_or(serde_json::Value::Null),
+                },
+                Ok(None) => DaemonResponse::Error {
+                    message: "No snapshots found".to_string(),
+                },
+                Err(e) => DaemonResponse::Error { message: e },
+            }
+        }
+
+        DaemonRequest::CrList {
+            project_path,
+            task_id,
+            limit,
+        } => {
+            use rn_desktop_2_lib::context_resurrection::query;
+
+            match query::cr_list(&state.snapshot_store, &project_path, &task_id, limit) {
+                Ok(snapshots) => {
+                    let values: Vec<serde_json::Value> = snapshots
+                        .into_iter()
+                        .map(|s| serde_json::to_value(&s).unwrap_or(serde_json::Value::Null))
+                        .collect();
+                    DaemonResponse::CrSnapshots { snapshots: values }
+                }
+                Err(e) => DaemonResponse::Error { message: e },
+            }
+        }
+
+        DaemonRequest::CrGet {
+            project_path,
+            task_id,
+            snapshot_id,
+        } => {
+            use rn_desktop_2_lib::context_resurrection::query;
+
+            match query::cr_get(&state.snapshot_store, &project_path, &task_id, &snapshot_id) {
+                Ok(snapshot) => DaemonResponse::CrSnapshot {
+                    snapshot: serde_json::to_value(&snapshot).unwrap_or(serde_json::Value::Null),
+                },
+                Err(e) => DaemonResponse::Error { message: e },
+            }
+        }
+
+        DaemonRequest::CrCaptureNow {
+            project_path,
+            task_id,
+            user_note,
+        } => {
+            use rn_desktop_2_lib::context_resurrection::query;
+
+            // Find the task to get task_title and session_id
+            let (task_title, session_id) = {
+                let registry = state.registry.read().await;
+                let session = registry.sessions.values().find(|s| {
+                    s.task_id.as_deref() == Some(&task_id) && s.project_path == project_path
+                });
+
+                match session {
+                    Some(s) => (s.task_key.clone(), Some(s.id)),
+                    None => {
+                        // No active session - use task_id as title and no session_id
+                        (task_id.clone(), None)
+                    }
+                }
+            };
+
+            // Lock capture service and call handler
+            let capture_service_guard = state.capture_service.lock().await;
+            match capture_service_guard.as_ref() {
+                Some(capture_service) => {
+                    match query::cr_capture_now(
+                        capture_service,
+                        &project_path,
+                        &task_id,
+                        &task_title,
+                        session_id,
+                        user_note,
+                    ) {
+                        Ok(Some(snapshot)) => DaemonResponse::CrSnapshot {
+                            snapshot: serde_json::to_value(&snapshot)
+                                .unwrap_or(serde_json::Value::Null),
+                        },
+                        Ok(None) => DaemonResponse::Error {
+                            message: "Capture was skipped (dedup/rate-limit)".to_string(),
+                        },
+                        Err(e) => DaemonResponse::Error { message: e },
+                    }
+                }
+                None => DaemonResponse::Error {
+                    message: "Context Resurrection capture service is unavailable".to_string(),
+                },
+            }
+        }
+
+        DaemonRequest::CrDeleteTask {
+            project_path,
+            task_id,
+        } => {
+            use rn_desktop_2_lib::context_resurrection::query;
+
+            match query::cr_delete_task(&state.snapshot_store, &project_path, &task_id) {
+                Ok(deleted_count) => DaemonResponse::CrDeleted { deleted_count },
+                Err(e) => DaemonResponse::Error { message: e },
+            }
+        }
+
+        DaemonRequest::CrDeleteProject { project_path } => {
+            use rn_desktop_2_lib::context_resurrection::query;
+
+            match query::cr_delete_project(&state.snapshot_store, &project_path) {
+                Ok(deleted_count) => DaemonResponse::CrDeleted { deleted_count },
+                Err(e) => DaemonResponse::Error { message: e },
             }
         }
     }
@@ -2142,6 +2271,135 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_cr_protocol_end_to_end() {
+        let (config, temp_dir) = test_config();
+        let state = Arc::new(DaemonState::new(config).unwrap());
+        state.init_capture_service().await;
+        let (shutdown_tx, _) = tokio::sync::mpsc::channel::<()>(1);
+
+        // Create a markdown file
+        let markdown_path = temp_dir.path().join("TODO.md");
+        let initial_content = "# Tasks\n- [ ] Test task\n";
+        tokio::fs::write(&markdown_path, initial_content)
+            .await
+            .unwrap();
+
+        // Start a session to get a task_id
+        let start_request = DaemonRequest::Start {
+            task_key: "Test".to_string(),
+            task_id: Some("test.test-task".to_string()),
+            project_path: markdown_path.to_string_lossy().to_string(),
+            shell: Some(vec!["echo".to_string(), "hello".to_string()]),
+        };
+
+        let start_response = handle_request(&state, start_request, &shutdown_tx).await;
+        assert!(matches!(
+            start_response,
+            DaemonResponse::SessionStarted { .. }
+        ));
+
+        // Wait a bit for session to produce output
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Test CrCaptureNow: trigger a manual capture
+        let capture_request = DaemonRequest::CrCaptureNow {
+            project_path: markdown_path.to_string_lossy().to_string(),
+            task_id: "test.test-task".to_string(),
+            user_note: Some("Manual test capture".to_string()),
+        };
+
+        let capture_response = handle_request(&state, capture_request, &shutdown_tx).await;
+        match &capture_response {
+            DaemonResponse::CrSnapshot { snapshot } => {
+                assert!(snapshot.is_object());
+                let obj = snapshot.as_object().unwrap();
+                assert_eq!(obj.get("task_id").unwrap().as_str(), Some("test.test-task"));
+                assert_eq!(
+                    obj.get("user_note").unwrap().as_str(),
+                    Some("Manual test capture")
+                );
+            }
+            DaemonResponse::Error { message } => {
+                panic!("CrCaptureNow failed: {}", message);
+            }
+            _ => panic!("Unexpected response: {:?}", capture_response),
+        }
+
+        // Test CrLatest: get the latest snapshot
+        let latest_request = DaemonRequest::CrLatest {
+            project_path: markdown_path.to_string_lossy().to_string(),
+            task_id: Some("test.test-task".to_string()),
+        };
+
+        let latest_response = handle_request(&state, latest_request, &shutdown_tx).await;
+        match &latest_response {
+            DaemonResponse::CrSnapshot { snapshot } => {
+                assert!(snapshot.is_object());
+                let obj = snapshot.as_object().unwrap();
+                assert_eq!(obj.get("task_id").unwrap().as_str(), Some("test.test-task"));
+            }
+            DaemonResponse::Error { message } => {
+                panic!("CrLatest failed: {}", message);
+            }
+            _ => panic!("Unexpected response: {:?}", latest_response),
+        }
+
+        // Test CrList: list all snapshots for the task
+        let list_request = DaemonRequest::CrList {
+            project_path: markdown_path.to_string_lossy().to_string(),
+            task_id: "test.test-task".to_string(),
+            limit: None,
+        };
+
+        let list_response = handle_request(&state, list_request, &shutdown_tx).await;
+        match &list_response {
+            DaemonResponse::CrSnapshots { snapshots } => {
+                assert_eq!(snapshots.len(), 1);
+                let snapshot = &snapshots[0];
+                assert!(snapshot.is_object());
+                let obj = snapshot.as_object().unwrap();
+                assert_eq!(obj.get("task_id").unwrap().as_str(), Some("test.test-task"));
+            }
+            DaemonResponse::Error { message } => {
+                panic!("CrList failed: {}", message);
+            }
+            _ => panic!("Unexpected response: {:?}", list_response),
+        }
+
+        // Test CrDeleteTask: delete all snapshots for the task
+        let delete_task_request = DaemonRequest::CrDeleteTask {
+            project_path: markdown_path.to_string_lossy().to_string(),
+            task_id: "test.test-task".to_string(),
+        };
+
+        let delete_task_response = handle_request(&state, delete_task_request, &shutdown_tx).await;
+        match &delete_task_response {
+            DaemonResponse::CrDeleted { deleted_count } => {
+                assert_eq!(*deleted_count, 1);
+            }
+            DaemonResponse::Error { message } => {
+                panic!("CrDeleteTask failed: {}", message);
+            }
+            _ => panic!("Unexpected response: {:?}", delete_task_response),
+        }
+
+        // Verify snapshots are gone
+        let list_after_delete = DaemonRequest::CrList {
+            project_path: markdown_path.to_string_lossy().to_string(),
+            task_id: "test.test-task".to_string(),
+            limit: None,
+        };
+
+        let list_after_response = handle_request(&state, list_after_delete, &shutdown_tx).await;
+        match &list_after_response {
+            DaemonResponse::CrSnapshots { snapshots } => {
+                assert_eq!(snapshots.len(), 0);
+            }
+            _ => panic!("Unexpected response after delete"),
         }
     }
 }

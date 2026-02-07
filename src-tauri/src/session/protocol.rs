@@ -207,6 +207,39 @@ pub enum DaemonRequest {
     Ping,
     /// Request daemon to shut down gracefully
     Shutdown,
+    /// Get latest snapshot for a task (or any task if task_id is None)
+    CrLatest {
+        project_path: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
+    },
+    /// List snapshots for a task
+    CrList {
+        project_path: String,
+        task_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        limit: Option<usize>,
+    },
+    /// Get a specific snapshot by ID
+    CrGet {
+        project_path: String,
+        task_id: String,
+        snapshot_id: String,
+    },
+    /// Trigger a manual snapshot capture
+    CrCaptureNow {
+        project_path: String,
+        task_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        user_note: Option<String>,
+    },
+    /// Delete all snapshots for a task
+    CrDeleteTask {
+        project_path: String,
+        task_id: String,
+    },
+    /// Delete all snapshots for a project
+    CrDeleteProject { project_path: String },
 }
 
 // ============================================================================
@@ -254,6 +287,12 @@ pub enum DaemonResponse {
     Pong,
     /// Shutdown acknowledged
     ShuttingDown,
+    /// Context Resurrection snapshot (single)
+    CrSnapshot { snapshot: serde_json::Value },
+    /// Context Resurrection snapshots (list)
+    CrSnapshots { snapshots: Vec<serde_json::Value> },
+    /// Context Resurrection deletion result
+    CrDeleted { deleted_count: usize },
     /// Error response
     Error { message: String },
 }
