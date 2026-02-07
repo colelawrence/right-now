@@ -1,5 +1,5 @@
 import { IconClock, IconTerminal, IconX } from "@tabler/icons-react";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { selectCardData } from "../lib/context-resurrection/selectors";
 import type { ContextSnapshotV1 } from "../lib/context-resurrection/types";
 import { cn } from "./utils/cn";
@@ -8,6 +8,7 @@ export interface ResurrectionCardProps {
   snapshot: ContextSnapshotV1;
   onDismiss: () => void;
   onResume?: () => void | Promise<void>;
+  onSaveNote?: (note: string) => void | Promise<void>;
   className?: string;
 }
 
@@ -25,8 +26,32 @@ function statusBadge(status: string | undefined) {
   return null;
 }
 
-export function ResurrectionCard({ snapshot, onDismiss, onResume, className }: ResurrectionCardProps) {
+export function ResurrectionCard({ snapshot, onDismiss, onResume, onSaveNote, className }: ResurrectionCardProps) {
   const data = useMemo(() => selectCardData(snapshot), [snapshot]);
+
+  const [draftNote, setDraftNote] = useState(snapshot.user_note ?? "");
+  const [isSavingNote, setIsSavingNote] = useState(false);
+  const [noteError, setNoteError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDraftNote(snapshot.user_note ?? "");
+    setIsSavingNote(false);
+    setNoteError(null);
+  }, [snapshot.id, snapshot.user_note]);
+
+  const handleSaveNote = async () => {
+    if (!onSaveNote) return;
+
+    setNoteError(null);
+    setIsSavingNote(true);
+    try {
+      await onSaveNote(draftNote);
+    } catch (error) {
+      setNoteError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsSavingNote(false);
+    }
+  };
 
   return (
     <div
@@ -111,7 +136,7 @@ export function ResurrectionCard({ snapshot, onDismiss, onResume, className }: R
           </div>
         )}
 
-        {/* Note */}
+        {/* Note (display) */}
         {data.userNote && (
           <div className="mb-3">
             <div className="text-sm font-medium text-gray-900 mb-1">Note to future self</div>
@@ -121,7 +146,32 @@ export function ResurrectionCard({ snapshot, onDismiss, onResume, className }: R
           </div>
         )}
 
-        {!data.terminal && !data.userNote && (
+        {/* Note editor (manual capture) */}
+        {onSaveNote && (
+          <div className="mb-3">
+            <div className="text-sm font-medium text-gray-900 mb-1">{data.userNote ? "Update note" : "Add note"}</div>
+            <textarea
+              value={draftNote}
+              onChange={(e) => setDraftNote(e.currentTarget.value)}
+              rows={3}
+              className="w-full text-sm border border-gray-300 rounded p-2 focus:outline-none focus:ring-2 focus:ring-blue-200"
+              placeholder="Write a note to future you..."
+            />
+            {noteError && <div className="mt-1 text-xs text-red-600">{noteError}</div>}
+            <div className="mt-2 flex justify-end">
+              <button
+                type="button"
+                onClick={handleSaveNote}
+                disabled={isSavingNote || draftNote.trim().length === 0}
+                className="px-3 py-1.5 bg-blue-500 text-white text-sm rounded hover:bg-blue-600 disabled:opacity-50 transition-colors"
+              >
+                {isSavingNote ? "Saving..." : "Save note"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {!data.terminal && !data.userNote && !onSaveNote && (
           <div className="text-sm text-gray-600">No additional context captured for this snapshot.</div>
         )}
 

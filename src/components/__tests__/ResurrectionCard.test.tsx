@@ -60,4 +60,23 @@ describe("ResurrectionCard", () => {
     expect(html).toContain("No terminal");
     expect(html).toContain("No additional context captured");
   });
+
+  it("renders note editor when onSaveNote is provided", () => {
+    const snapshot: ContextSnapshotV1 = {
+      id: "snap-3",
+      version: 1,
+      project_path: "/tmp/TODO.md",
+      task_id: "abc.note-editor",
+      task_title_at_capture: "Note editor",
+      captured_at: "2026-02-06T13:12:33Z",
+      capture_reason: "manual",
+    };
+
+    const html = renderToStaticMarkup(
+      <ResurrectionCard snapshot={snapshot} onDismiss={() => {}} onSaveNote={() => {}} />,
+    );
+
+    expect(html).toContain("Save note");
+    expect(html).toContain("Write a note to future you");
+  });
 });

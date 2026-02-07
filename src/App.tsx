@@ -380,6 +380,31 @@ function AppReady({ controllers, startupWarning }: { controllers: AppControllers
     }
   };
 
+  const handleSaveResurrectionNote = async (note: string) => {
+    if (!loaded || !crCardSnapshot) return;
+
+    const captured = await crClient.captureNow(loaded.fullPath, crCardSnapshot.task_id, note);
+
+    if (!captured.ok) {
+      if (captured.error.type === "daemon_unavailable") {
+        setCrDaemonUnavailable(true);
+        throw new Error("Context Resurrection is unavailable (daemon not running)");
+      }
+
+      throw new Error(captured.error.message ?? captured.error.type);
+    }
+
+    if (!captured.value) {
+      throw new Error("Capture was skipped (dedup/rate-limit)");
+    }
+
+    // Update UI state immediately (snapshot store changes are not watched by the UI).
+    setCrTaskHasContext((prev) => ({ ...prev, [captured.value!.task_id]: true }));
+    setCrCardPinned(true);
+    setCrDismissedSnapshotId(null);
+    setCrCardSnapshot(captured.value);
+  };
+
   // If no project is loaded, show the choose project UI
   if (!loaded || !project) {
     return (
@@ -424,6 +449,7 @@ function AppReady({ controllers, startupWarning }: { controllers: AppControllers
     onDismissResurrectionCard: handleDismissResurrectionCard,
     onOpenResurrectionForTask: handleOpenResurrectionForTask,
     onResumeResurrectionCard: handleResumeFromResurrectionCard,
+    onSaveResurrectionNote: handleSaveResurrectionNote,
   };
 
   return (
@@ -455,6 +481,7 @@ interface AppViewProps {
   onDismissResurrectionCard: () => void;
   onOpenResurrectionForTask: (taskId: string) => void | Promise<void>;
   onResumeResurrectionCard: (snapshot: ContextSnapshotV1) => void | Promise<void>;
+  onSaveResurrectionNote: (note: string) => void | Promise<void>;
 }
 
 function useCurrentTask(project: LoadedProjectState) {
@@ -631,6 +658,7 @@ function AppPlanner({
   onDismissResurrectionCard,
   onOpenResurrectionForTask,
   onResumeResurrectionCard,
+  onSaveResurrectionNote,
 }: AppViewProps) {
   const sessionsDebugEnabled = import.meta.env.DEV;
   const [showSessionsDebug, setShowSessionsDebug] = useState(false);
@@ -736,6 +764,7 @@ function AppPlanner({
             snapshot={crCardSnapshot}
             onDismiss={onDismissResurrectionCard}
             onResume={() => onResumeResurrectionCard(crCardSnapshot)}
+            onSaveNote={onSaveResurrectionNote}
           />
         )}
 
