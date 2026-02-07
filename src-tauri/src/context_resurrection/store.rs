@@ -260,6 +260,123 @@ impl SnapshotStore {
 
         Ok((deleted, scanned, false))
     }
+
+    /// Read a snapshot by ID
+    ///
+    /// If the snapshot contains a `tail_path` reference but the file does not exist,
+    /// the snapshot is returned with `tail_path` cleared (None) and a debug warning logged.
+    /// This ensures missing tail files do not prevent snapshot reads.
+    pub fn read_snapshot(
+        &self,
+        project_path: &Path,
+        task_id: &str,
+        snapshot_id: &str,
+    ) -> io::Result<ContextSnapshotV1> {
+        if !self.available {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "SnapshotStore is unavailable",
+            ));
+        }
+
+        let snapshot_path = self.snapshot_path(project_path, task_id, snapshot_id);
+        let content = fs::read_to_string(&snapshot_path)?;
+        let mut snapshot: ContextSnapshotV1 = serde_json::from_str(&content)?;
+
+        // Handle missing tail_path (per §1.3.1)
+        if let Some(ref terminal) = snapshot.terminal {
+            if let Some(ref tail_path) = terminal.tail_path {
+                if !Path::new(tail_path).exists() {
+                    eprintln!(
+                        "Debug: Missing tail_path for snapshot {}: {}",
+                        snapshot_id, tail_path
+                    );
+                    // Clear the tail_path reference
+                    if let Some(ref mut term) = snapshot.terminal {
+                        term.tail_path = None;
+                    }
+                }
+            }
+        }
+
+        Ok(snapshot)
+    }
+
+    /// List snapshots for a specific task
+    ///
+    /// Returns snapshots sorted by captured_at timestamp (newest first).
+    /// If `limit` is specified, returns at most that many snapshots.
+    pub fn list_snapshots(
+        &self,
+        project_path: &Path,
+        task_id: &str,
+        limit: Option<usize>,
+    ) -> io::Result<Vec<ContextSnapshotV1>> {
+        if !self.available {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "SnapshotStore is unavailable",
+            ));
+        }
+
+        let task_dir = self.task_dir(project_path, task_id);
+        if !task_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut snapshots = Vec::new();
+
+        for entry in fs::read_dir(&task_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            // Only process .json files (skip .tmp.*, tail files, etc.)
+            if !path.is_file() {
+                continue;
+            }
+            if let Some(ext) = path.extension() {
+                if ext != "json" {
+                    continue;
+                }
+            } else {
+                continue;
+            }
+
+            // Extract snapshot_id from filename
+            if let Some(filename) = path.file_stem().and_then(|s| s.to_str()) {
+                match self.read_snapshot(project_path, task_id, filename) {
+                    Ok(snapshot) => snapshots.push(snapshot),
+                    Err(e) => {
+                        eprintln!("Warning: Failed to read snapshot {}: {}", path.display(), e);
+                        // Continue processing other snapshots
+                    }
+                }
+            }
+        }
+
+        // Sort by captured_at timestamp (newest first)
+        snapshots.sort_by(|a, b| b.captured_at.cmp(&a.captured_at));
+
+        // Apply limit if specified
+        if let Some(limit) = limit {
+            snapshots.truncate(limit);
+        }
+
+        Ok(snapshots)
+    }
+
+    /// Get the latest snapshot for a specific task
+    ///
+    /// Returns the snapshot with the most recent captured_at timestamp,
+    /// or None if no snapshots exist.
+    pub fn latest_snapshot(
+        &self,
+        project_path: &Path,
+        task_id: &str,
+    ) -> io::Result<Option<ContextSnapshotV1>> {
+        let snapshots = self.list_snapshots(project_path, task_id, Some(1))?;
+        Ok(snapshots.into_iter().next())
+    }
 }
 
 #[cfg(test)]
@@ -448,5 +565,282 @@ mod tests {
         let result = store.write_snapshot(&project_path, "err.test", &snapshot);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("unavailable"));
+    }
+
+    #[test]
+    fn test_read_snapshot_by_id() {
+        use super::super::models::{CaptureReason, ContextSnapshotV1};
+
+        let temp_dir = TempDir::new().unwrap();
+        let store = SnapshotStore::new(temp_dir.path());
+
+        let project_path = temp_dir.path().join("TODO.md");
+        fs::write(&project_path, "# TODO\n").unwrap();
+
+        let snapshot = ContextSnapshotV1::new(
+            "2026-02-06T13:12:33Z_abc.read-test".to_string(),
+            project_path.to_string_lossy().to_string(),
+            "abc.read-test".to_string(),
+            "Read test task".to_string(),
+            "2026-02-06T13:12:33Z".to_string(),
+            CaptureReason::Manual,
+        );
+
+        store
+            .write_snapshot(&project_path, "abc.read-test", &snapshot)
+            .unwrap();
+
+        // Read it back
+        let read_snapshot = store
+            .read_snapshot(
+                &project_path,
+                "abc.read-test",
+                "2026-02-06T13:12:33Z_abc.read-test",
+            )
+            .unwrap();
+
+        assert_eq!(read_snapshot.id, snapshot.id);
+        assert_eq!(read_snapshot.task_id, snapshot.task_id);
+        assert_eq!(read_snapshot.capture_reason, CaptureReason::Manual);
+    }
+
+    #[test]
+    fn test_list_snapshots_ordering() {
+        use super::super::models::{CaptureReason, ContextSnapshotV1};
+
+        let temp_dir = TempDir::new().unwrap();
+        let store = SnapshotStore::new(temp_dir.path());
+
+        let project_path = temp_dir.path().join("TODO.md");
+        fs::write(&project_path, "# TODO\n").unwrap();
+
+        // Create snapshots with different timestamps
+        let snapshot1 = ContextSnapshotV1::new(
+            "2026-02-06T10:00:00Z_xyz.list-test".to_string(),
+            project_path.to_string_lossy().to_string(),
+            "xyz.list-test".to_string(),
+            "List test task".to_string(),
+            "2026-02-06T10:00:00Z".to_string(), // oldest
+            CaptureReason::SessionStopped,
+        );
+
+        let snapshot2 = ContextSnapshotV1::new(
+            "2026-02-06T11:00:00Z_xyz.list-test".to_string(),
+            project_path.to_string_lossy().to_string(),
+            "xyz.list-test".to_string(),
+            "List test task".to_string(),
+            "2026-02-06T11:00:00Z".to_string(), // middle
+            CaptureReason::SessionWaiting,
+        );
+
+        let snapshot3 = ContextSnapshotV1::new(
+            "2026-02-06T12:00:00Z_xyz.list-test".to_string(),
+            project_path.to_string_lossy().to_string(),
+            "xyz.list-test".to_string(),
+            "List test task".to_string(),
+            "2026-02-06T12:00:00Z".to_string(), // newest
+            CaptureReason::Manual,
+        );
+
+        // Write in non-chronological order to test sorting
+        store
+            .write_snapshot(&project_path, "xyz.list-test", &snapshot2)
+            .unwrap();
+        store
+            .write_snapshot(&project_path, "xyz.list-test", &snapshot1)
+            .unwrap();
+        store
+            .write_snapshot(&project_path, "xyz.list-test", &snapshot3)
+            .unwrap();
+
+        // List all snapshots
+        let snapshots = store
+            .list_snapshots(&project_path, "xyz.list-test", None)
+            .unwrap();
+
+        assert_eq!(snapshots.len(), 3);
+        // Should be sorted newest first
+        assert_eq!(snapshots[0].captured_at, "2026-02-06T12:00:00Z");
+        assert_eq!(snapshots[1].captured_at, "2026-02-06T11:00:00Z");
+        assert_eq!(snapshots[2].captured_at, "2026-02-06T10:00:00Z");
+    }
+
+    #[test]
+    fn test_list_snapshots_with_limit() {
+        use super::super::models::{CaptureReason, ContextSnapshotV1};
+
+        let temp_dir = TempDir::new().unwrap();
+        let store = SnapshotStore::new(temp_dir.path());
+
+        let project_path = temp_dir.path().join("TODO.md");
+        fs::write(&project_path, "# TODO\n").unwrap();
+
+        // Create 5 snapshots
+        for i in 1..=5 {
+            let snapshot = ContextSnapshotV1::new(
+                format!("2026-02-06T10:{:02}:00Z_lim.limit-test", i),
+                project_path.to_string_lossy().to_string(),
+                "lim.limit-test".to_string(),
+                "Limit test task".to_string(),
+                format!("2026-02-06T10:{:02}:00Z", i),
+                CaptureReason::IdleTimeout,
+            );
+            store
+                .write_snapshot(&project_path, "lim.limit-test", &snapshot)
+                .unwrap();
+        }
+
+        // List with limit of 3
+        let limited = store
+            .list_snapshots(&project_path, "lim.limit-test", Some(3))
+            .unwrap();
+
+        assert_eq!(limited.len(), 3);
+        // Should get the 3 newest
+        assert!(limited[0].captured_at.contains("10:05:00"));
+        assert!(limited[1].captured_at.contains("10:04:00"));
+        assert!(limited[2].captured_at.contains("10:03:00"));
+    }
+
+    #[test]
+    fn test_latest_snapshot() {
+        use super::super::models::{CaptureReason, ContextSnapshotV1};
+
+        let temp_dir = TempDir::new().unwrap();
+        let store = SnapshotStore::new(temp_dir.path());
+
+        let project_path = temp_dir.path().join("TODO.md");
+        fs::write(&project_path, "# TODO\n").unwrap();
+
+        // No snapshots yet
+        let latest = store
+            .latest_snapshot(&project_path, "lat.latest-test")
+            .unwrap();
+        assert!(latest.is_none());
+
+        // Create multiple snapshots
+        let snapshot1 = ContextSnapshotV1::new(
+            "2026-02-06T10:00:00Z_lat.latest-test".to_string(),
+            project_path.to_string_lossy().to_string(),
+            "lat.latest-test".to_string(),
+            "Latest test task".to_string(),
+            "2026-02-06T10:00:00Z".to_string(),
+            CaptureReason::SessionStopped,
+        );
+
+        let snapshot2 = ContextSnapshotV1::new(
+            "2026-02-06T11:00:00Z_lat.latest-test".to_string(),
+            project_path.to_string_lossy().to_string(),
+            "lat.latest-test".to_string(),
+            "Latest test task".to_string(),
+            "2026-02-06T11:00:00Z".to_string(),
+            CaptureReason::Manual,
+        );
+
+        store
+            .write_snapshot(&project_path, "lat.latest-test", &snapshot1)
+            .unwrap();
+        store
+            .write_snapshot(&project_path, "lat.latest-test", &snapshot2)
+            .unwrap();
+
+        // Get latest
+        let latest = store
+            .latest_snapshot(&project_path, "lat.latest-test")
+            .unwrap();
+
+        assert!(latest.is_some());
+        let latest = latest.unwrap();
+        assert_eq!(latest.captured_at, "2026-02-06T11:00:00Z");
+        assert_eq!(latest.capture_reason, CaptureReason::Manual);
+    }
+
+    #[test]
+    fn test_missing_tail_path_handling() {
+        use super::super::models::{
+            AttentionSummary, AttentionType, CaptureReason, ContextSnapshotV1, SessionStatus,
+            TerminalContext,
+        };
+
+        let temp_dir = TempDir::new().unwrap();
+        let store = SnapshotStore::new(temp_dir.path());
+
+        let project_path = temp_dir.path().join("TODO.md");
+        fs::write(&project_path, "# TODO\n").unwrap();
+
+        // Create a snapshot with a tail_path reference
+        let mut snapshot = ContextSnapshotV1::new(
+            "2026-02-06T13:30:00Z_mtp.missing-tail".to_string(),
+            project_path.to_string_lossy().to_string(),
+            "mtp.missing-tail".to_string(),
+            "Missing tail test".to_string(),
+            "2026-02-06T13:30:00Z".to_string(),
+            CaptureReason::SessionStopped,
+        );
+
+        let tail_file_path = temp_dir.path().join("test-tail.txt");
+        snapshot.terminal = Some(TerminalContext {
+            session_id: 99,
+            status: SessionStatus::Stopped,
+            exit_code: Some(0),
+            last_attention: Some(AttentionSummary {
+                attention_type: AttentionType::Completed,
+                preview: "Build succeeded".to_string(),
+                triggered_at: "2026-02-06T13:29:00Z".to_string(),
+            }),
+            tail_inline: None,
+            tail_path: Some(tail_file_path.to_string_lossy().to_string()),
+        });
+
+        // Write the tail file initially
+        fs::write(&tail_file_path, "Terminal output here").unwrap();
+
+        // Write snapshot
+        store
+            .write_snapshot(&project_path, "mtp.missing-tail", &snapshot)
+            .unwrap();
+
+        // Delete the tail file to simulate missing reference
+        fs::remove_file(&tail_file_path).unwrap();
+
+        // Read the snapshot - should succeed with tail_path cleared
+        let read_snapshot = store
+            .read_snapshot(
+                &project_path,
+                "mtp.missing-tail",
+                "2026-02-06T13:30:00Z_mtp.missing-tail",
+            )
+            .unwrap();
+
+        // Verify snapshot was read successfully
+        assert_eq!(read_snapshot.id, snapshot.id);
+        assert!(read_snapshot.terminal.is_some());
+
+        let terminal = read_snapshot.terminal.unwrap();
+        // tail_path should be cleared (None)
+        assert!(
+            terminal.tail_path.is_none(),
+            "tail_path should be None when file is missing"
+        );
+        // Other terminal fields should be intact
+        assert_eq!(terminal.session_id, 99);
+        assert_eq!(terminal.exit_code, Some(0));
+        assert!(terminal.last_attention.is_some());
+    }
+
+    #[test]
+    fn test_list_snapshots_empty_task() {
+        let temp_dir = TempDir::new().unwrap();
+        let store = SnapshotStore::new(temp_dir.path());
+
+        let project_path = temp_dir.path().join("TODO.md");
+        fs::write(&project_path, "# TODO\n").unwrap();
+
+        // List snapshots for task with no snapshots
+        let snapshots = store
+            .list_snapshots(&project_path, "emp.empty-task", None)
+            .unwrap();
+
+        assert_eq!(snapshots.len(), 0);
     }
 }

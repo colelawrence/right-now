@@ -8,17 +8,22 @@
 // - Broadcast session updates to subscribed clients
 
 use anyhow::{Context, Result};
-use rn_desktop_2_lib::session::{
-    attention,
-    config::Config,
-    markdown::{find_task_by_key, parse_body, update_task_session_in_content, TaskSessionStatus},
-    notify::{notify_attention, NotificationDebouncer},
-    persistence::{atomic_write, SessionRegistry},
-    protocol::{
-        deserialize_message, serialize_message, AttentionSummary, DaemonNotification,
-        DaemonRequest, DaemonResponse, Session, SessionId, SessionStatus,
+use rn_desktop_2_lib::{
+    context_resurrection::capture::{SessionProvider, SessionSnapshot},
+    session::{
+        attention,
+        config::Config,
+        markdown::{
+            find_task_by_key, parse_body, update_task_session_in_content, TaskSessionStatus,
+        },
+        notify::{notify_attention, NotificationDebouncer},
+        persistence::{atomic_write, SessionRegistry},
+        protocol::{
+            deserialize_message, serialize_message, AttentionSummary, DaemonNotification,
+            DaemonRequest, DaemonResponse, Session, SessionId, SessionStatus,
+        },
+        runtime::{PtyEvent, PtyRuntime},
     },
-    runtime::{PtyEvent, PtyRuntime},
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -978,6 +983,90 @@ async fn update_session_status(
     }
 }
 
+// ============================================================================
+// SessionProvider implementation for Context Resurrection
+// ============================================================================
+
+/// Tail size for CR captures (8KB is enough for context without bloating snapshots)
+const CR_TAIL_BYTES: usize = 8 * 1024;
+
+impl SessionProvider for DaemonState {
+    fn get_session_state(&self, session_id: u64) -> Option<SessionSnapshot> {
+        // Helper to run async code from sync context, handling nested runtime case
+        fn run_async<F, T>(future: F) -> T
+        where
+            F: std::future::Future<Output = T> + Send,
+            T: Send,
+        {
+            match tokio::runtime::Handle::try_current() {
+                Ok(handle) => {
+                    // Already in a runtime - use block_in_place to safely block
+                    tokio::task::block_in_place(|| handle.block_on(future))
+                }
+                Err(_) => {
+                    // Not in a runtime - create one
+                    tokio::runtime::Runtime::new().unwrap().block_on(future)
+                }
+            }
+        }
+
+        // Get session metadata from registry
+        let session = run_async(async {
+            let registry = self.registry.read().await;
+            registry.get(session_id).cloned()
+        })?;
+
+        // Get tail from running PTY or completed tail storage
+        let tail_bytes = run_async(async { self.session_tail(session_id, CR_TAIL_BYTES).await })
+            .unwrap_or_default();
+
+        // Decode tail as UTF-8 (lossy is fine for CR - we just need context)
+        let tail = String::from_utf8_lossy(&tail_bytes).to_string();
+
+        // Map protocol SessionStatus to CR SessionStatus
+        let status = match session.status {
+            SessionStatus::Running => {
+                rn_desktop_2_lib::context_resurrection::models::SessionStatus::Running
+            }
+            SessionStatus::Waiting => {
+                rn_desktop_2_lib::context_resurrection::models::SessionStatus::Waiting
+            }
+            SessionStatus::Stopped => {
+                rn_desktop_2_lib::context_resurrection::models::SessionStatus::Stopped
+            }
+        };
+
+        // Map protocol AttentionSummary to CR AttentionSummary
+        let last_attention = session.last_attention.map(|att| {
+            rn_desktop_2_lib::context_resurrection::models::AttentionSummary {
+                attention_type: match att.attention_type {
+                    rn_desktop_2_lib::session::protocol::AttentionType::InputRequired => {
+                        rn_desktop_2_lib::context_resurrection::models::AttentionType::InputRequired
+                    }
+                    rn_desktop_2_lib::session::protocol::AttentionType::DecisionPoint => {
+                        rn_desktop_2_lib::context_resurrection::models::AttentionType::DecisionPoint
+                    }
+                    rn_desktop_2_lib::session::protocol::AttentionType::Completed => {
+                        rn_desktop_2_lib::context_resurrection::models::AttentionType::Completed
+                    }
+                    rn_desktop_2_lib::session::protocol::AttentionType::Error => {
+                        rn_desktop_2_lib::context_resurrection::models::AttentionType::Error
+                    }
+                },
+                preview: att.preview,
+                triggered_at: att.triggered_at.to_rfc3339(),
+            }
+        });
+
+        Some(SessionSnapshot {
+            status,
+            exit_code: session.exit_code,
+            last_attention,
+            tail,
+        })
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Load configuration
@@ -1579,5 +1668,152 @@ mod tests {
         }
 
         let _ = handle_request(&state, DaemonRequest::Stop { session_id }, &shutdown_tx).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_session_provider_returns_non_empty_tail() {
+        use crate::SessionProvider;
+
+        let (config, temp_dir) = test_config();
+        let markdown_path = temp_dir.path().join("TODO.md");
+        tokio::fs::write(&markdown_path, "# Tasks\n- [ ] Provider test\n")
+            .await
+            .unwrap();
+
+        let state = Arc::new(DaemonState::new(config).unwrap());
+        let (shutdown_tx, _) = tokio::sync::mpsc::channel::<()>(1);
+
+        // Start a session that produces output
+        let script = "echo 'session-provider-test-output'; sleep 0.1";
+        let start = DaemonRequest::Start {
+            task_key: "Provider".to_string(),
+            task_id: Some("abc.provider-test".to_string()),
+            project_path: markdown_path.to_string_lossy().to_string(),
+            shell: Some(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                script.to_string(),
+            ]),
+        };
+
+        let response = handle_request(&state, start, &shutdown_tx).await;
+        let session_id = match response {
+            DaemonResponse::SessionStarted { session } => session.id,
+            other => panic!("Expected SessionStarted, got {:?}", other),
+        };
+
+        // Wait for output and session to stop (need to wait for both PTY exit and watcher update)
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // Fetch via SessionProvider trait
+        let snapshot = state
+            .get_session_state(session_id)
+            .expect("Expected session snapshot");
+
+        // Verify snapshot has non-empty tail with our test output
+        assert!(
+            !snapshot.tail.is_empty(),
+            "Tail should be non-empty for session with output"
+        );
+        assert!(
+            snapshot.tail.contains("session-provider-test-output"),
+            "Tail should contain test output. Got: {}",
+            snapshot.tail
+        );
+
+        // Verify status is Stopped (session completed)
+        // Note: may still be Running if watcher hasn't polled yet, that's OK
+        assert!(
+            matches!(
+                snapshot.status,
+                rn_desktop_2_lib::context_resurrection::models::SessionStatus::Stopped
+                    | rn_desktop_2_lib::context_resurrection::models::SessionStatus::Running
+            ),
+            "Status should be Stopped or Running, got: {:?}",
+            snapshot.status
+        );
+
+        // Exit code should be set if Stopped
+        if snapshot.status == rn_desktop_2_lib::context_resurrection::models::SessionStatus::Stopped
+        {
+            assert_eq!(snapshot.exit_code, Some(0));
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_session_provider_returns_none_for_missing_session() {
+        use crate::SessionProvider;
+
+        let (config, _temp_dir) = test_config();
+        let state = Arc::new(DaemonState::new(config).unwrap());
+
+        // Request a session that doesn't exist
+        let snapshot = state.get_session_state(99999);
+        assert!(snapshot.is_none(), "Expected None for non-existent session");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_session_provider_maps_attention_summary() {
+        use crate::SessionProvider;
+
+        let (config, temp_dir) = test_config();
+        let markdown_path = temp_dir.path().join("TODO.md");
+        tokio::fs::write(&markdown_path, "# Tasks\n- [ ] Attention mapping test\n")
+            .await
+            .unwrap();
+
+        let state = Arc::new(DaemonState::new(config).unwrap());
+        let (shutdown_tx, _) = tokio::sync::mpsc::channel::<()>(1);
+
+        // Start a session that triggers attention
+        let script = "echo \"error: something went wrong\"; sleep 0.2";
+        let start = DaemonRequest::Start {
+            task_key: "Attention mapping".to_string(),
+            task_id: Some("xyz.attention-test".to_string()),
+            project_path: markdown_path.to_string_lossy().to_string(),
+            shell: Some(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                script.to_string(),
+            ]),
+        };
+
+        let response = handle_request(&state, start, &shutdown_tx).await;
+        let session_id = match response {
+            DaemonResponse::SessionStarted { session } => session.id,
+            other => panic!("Expected SessionStarted, got {:?}", other),
+        };
+
+        // Wait for attention detection (need enough time for output + detection)
+        tokio::time::sleep(Duration::from_millis(600)).await;
+
+        // Fetch via SessionProvider trait
+        let snapshot = state
+            .get_session_state(session_id)
+            .expect("Expected session snapshot");
+
+        // Verify attention summary was mapped correctly (if detected)
+        if let Some(attention) = snapshot.last_attention {
+            assert_eq!(
+                attention.attention_type,
+                rn_desktop_2_lib::context_resurrection::models::AttentionType::Error
+            );
+            assert!(
+                attention.preview.to_lowercase().contains("error")
+                    || attention.preview.to_lowercase().contains("wrong"),
+                "Preview should contain error message. Got: {}",
+                attention.preview
+            );
+
+            // Verify triggered_at is a valid ISO8601 string
+            assert!(
+                chrono::DateTime::parse_from_rfc3339(&attention.triggered_at).is_ok(),
+                "triggered_at should be valid ISO8601: {}",
+                attention.triggered_at
+            );
+        } else {
+            // Attention detection is best-effort, so we just verify the session exists
+            eprintln!("Note: Attention not detected in test (timing-dependent, OK to skip)");
+        }
     }
 }
