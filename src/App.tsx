@@ -20,6 +20,8 @@ import {
   SessionClient,
   copyTodoFilePath,
   createTauriCrTransport,
+  forgetProjectContext,
+  forgetTaskContext,
   formatDisplayPath,
   loadResurrectionState,
   openTodoFile,
@@ -405,6 +407,57 @@ function AppReady({ controllers, startupWarning }: { controllers: AppControllers
     setCrCardSnapshot(captured.value);
   };
 
+  const handleForgetTaskContext = async () => {
+    if (!loaded || !crCardSnapshot) return;
+
+    const taskId = crCardSnapshot.task_id;
+    const confirmed = confirm(
+      `Forget this task's context?\n\nThis deletes all stored snapshots for:\n${crCardSnapshot.task_title_at_capture}`,
+    );
+    if (!confirmed) return;
+
+    const res = await forgetTaskContext(crClient, loaded.fullPath, taskId, crTaskHasContext);
+
+    if (!res.ok) {
+      if (res.error.type === "daemon_unavailable") {
+        setCrDaemonUnavailable(true);
+      }
+      alert(res.error.message ?? res.error.type);
+      return;
+    }
+
+    setCrTaskHasContext(res.value.next);
+    setCrCardSnapshot(null);
+    setCrCardPinned(false);
+    setCrDismissedSnapshotId(null);
+
+    alert(`Deleted ${res.value.deletedCount} snapshots for this task.`);
+  };
+
+  const handleForgetProjectContext = async () => {
+    if (!loaded) return;
+
+    const confirmed = confirm("Forget project context?\n\nThis deletes ALL stored snapshots for this project.");
+    if (!confirmed) return;
+
+    const res = await forgetProjectContext(crClient, loaded.fullPath);
+
+    if (!res.ok) {
+      if (res.error.type === "daemon_unavailable") {
+        setCrDaemonUnavailable(true);
+      }
+      alert(res.error.message ?? res.error.type);
+      return;
+    }
+
+    setCrTaskHasContext(res.value.next);
+    setCrCardSnapshot(null);
+    setCrCardPinned(false);
+    setCrDismissedSnapshotId(null);
+
+    alert(`Deleted ${res.value.deletedCount} snapshots for this project.`);
+  };
+
   // If no project is loaded, show the choose project UI
   if (!loaded || !project) {
     return (
@@ -450,6 +503,8 @@ function AppReady({ controllers, startupWarning }: { controllers: AppControllers
     onOpenResurrectionForTask: handleOpenResurrectionForTask,
     onResumeResurrectionCard: handleResumeFromResurrectionCard,
     onSaveResurrectionNote: handleSaveResurrectionNote,
+    onForgetTaskContext: handleForgetTaskContext,
+    onForgetProjectContext: handleForgetProjectContext,
   };
 
   return (
@@ -482,6 +537,8 @@ interface AppViewProps {
   onOpenResurrectionForTask: (taskId: string) => void | Promise<void>;
   onResumeResurrectionCard: (snapshot: ContextSnapshotV1) => void | Promise<void>;
   onSaveResurrectionNote: (note: string) => void | Promise<void>;
+  onForgetTaskContext: () => void | Promise<void>;
+  onForgetProjectContext: () => void | Promise<void>;
 }
 
 function useCurrentTask(project: LoadedProjectState) {
@@ -659,6 +716,8 @@ function AppPlanner({
   onOpenResurrectionForTask,
   onResumeResurrectionCard,
   onSaveResurrectionNote,
+  onForgetTaskContext,
+  onForgetProjectContext,
 }: AppViewProps) {
   const sessionsDebugEnabled = import.meta.env.DEV;
   const [showSessionsDebug, setShowSessionsDebug] = useState(false);
@@ -765,6 +824,8 @@ function AppPlanner({
             onDismiss={onDismissResurrectionCard}
             onResume={() => onResumeResurrectionCard(crCardSnapshot)}
             onSaveNote={onSaveResurrectionNote}
+            onForgetTaskContext={onForgetTaskContext}
+            onForgetProjectContext={onForgetProjectContext}
           />
         )}
 

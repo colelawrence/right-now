@@ -9,6 +9,8 @@ export interface ResurrectionCardProps {
   onDismiss: () => void;
   onResume?: () => void | Promise<void>;
   onSaveNote?: (note: string) => void | Promise<void>;
+  onForgetTaskContext?: () => void | Promise<void>;
+  onForgetProjectContext?: () => void | Promise<void>;
   className?: string;
 }
 
@@ -26,7 +28,15 @@ function statusBadge(status: string | undefined) {
   return null;
 }
 
-export function ResurrectionCard({ snapshot, onDismiss, onResume, onSaveNote, className }: ResurrectionCardProps) {
+export function ResurrectionCard({
+  snapshot,
+  onDismiss,
+  onResume,
+  onSaveNote,
+  onForgetTaskContext,
+  onForgetProjectContext,
+  className,
+}: ResurrectionCardProps) {
   const data = useMemo(() => selectCardData(snapshot), [snapshot]);
 
   const [draftNote, setDraftNote] = useState(snapshot.user_note ?? "");
@@ -184,6 +194,24 @@ export function ResurrectionCard({ snapshot, onDismiss, onResume, onSaveNote, cl
             >
               Resume work
             </button>
+          </div>
+        )}
+
+        {(onForgetTaskContext || onForgetProjectContext) && (
+          <div className="mt-3 pt-3 border-t border-gray-200 flex items-center justify-between gap-3">
+            <div className="text-xs text-gray-500">Forget context</div>
+            <div className="flex items-center gap-2">
+              {onForgetTaskContext && (
+                <button type="button" onClick={onForgetTaskContext} className="text-xs text-red-700 hover:underline">
+                  Forget task
+                </button>
+              )}
+              {onForgetProjectContext && (
+                <button type="button" onClick={onForgetProjectContext} className="text-xs text-red-700 hover:underline">
+                  Forget project
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>

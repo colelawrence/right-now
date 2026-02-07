@@ -4,3 +4,4 @@ export * from "./selectors";
 export * from "./load";
 export * from "./tauri";
 export * from "./note";
+export * from "./forget";
