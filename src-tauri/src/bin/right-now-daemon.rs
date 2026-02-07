@@ -1095,6 +1095,7 @@ mod tests {
         // Start a session
         let request = DaemonRequest::Start {
             task_key: "Build".to_string(),
+            task_id: None,
             project_path: markdown_path.to_string_lossy().to_string(),
             shell: Some(vec!["echo".to_string(), "hello".to_string()]),
         };
@@ -1194,6 +1195,7 @@ mod tests {
         // Try to start a session for nonexistent task
         let request = DaemonRequest::Start {
             task_key: "nonexistent".to_string(),
+            task_id: None,
             project_path: markdown_path.to_string_lossy().to_string(),
             shell: None,
         };
@@ -1231,6 +1233,7 @@ mod tests {
         // Start first session
         let request = DaemonRequest::Start {
             task_key: "Build".to_string(),
+            task_id: None,
             project_path: markdown_path.to_string_lossy().to_string(),
             shell: Some(vec!["echo".to_string(), "hello".to_string()]),
         };
@@ -1239,6 +1242,7 @@ mod tests {
         // Try to start duplicate session
         let request = DaemonRequest::Start {
             task_key: "Build".to_string(),
+            task_id: None,
             project_path: markdown_path.to_string_lossy().to_string(),
             shell: Some(vec!["echo".to_string(), "hello".to_string()]),
         };
@@ -1275,6 +1279,7 @@ mod tests {
         // Start two sessions
         let request = DaemonRequest::Start {
             task_key: "Task 1".to_string(),
+            task_id: None,
             project_path: markdown_path.to_string_lossy().to_string(),
             shell: Some(vec!["echo".to_string(), "1".to_string()]),
         };
@@ -1282,6 +1287,7 @@ mod tests {
 
         let request = DaemonRequest::Start {
             task_key: "Task 2".to_string(),
+            task_id: None,
             project_path: markdown_path.to_string_lossy().to_string(),
             shell: Some(vec!["echo".to_string(), "2".to_string()]),
         };
@@ -1328,6 +1334,7 @@ mod tests {
 
         let request = DaemonRequest::Start {
             task_key: "Tail".to_string(),
+            task_id: None,
             project_path: markdown_path.to_string_lossy().to_string(),
             shell: Some(vec!["echo".to_string(), "tail-output".to_string()]),
         };
@@ -1373,6 +1380,7 @@ mod tests {
 
         let start = DaemonRequest::Start {
             task_key: "Attach".to_string(),
+            task_id: None,
             project_path: markdown_path.to_string_lossy().to_string(),
             shell: Some(vec!["sleep".to_string(), "1".to_string()]),
         };
@@ -1416,6 +1424,7 @@ mod tests {
         // Start a session that echoes whatever we send
         let start = DaemonRequest::Start {
             task_key: "Attach".to_string(),
+            task_id: None,
             project_path: markdown_path.to_string_lossy().to_string(),
             shell: Some(vec!["cat".to_string()]),
         };
@@ -1493,6 +1502,7 @@ mod tests {
 
         let start = DaemonRequest::Start {
             task_key: "Resize".to_string(),
+            task_id: None,
             project_path: markdown_path.to_string_lossy().to_string(),
             shell: Some(vec!["sleep".to_string(), "2".to_string()]),
         };
@@ -1537,6 +1547,7 @@ mod tests {
         let script = "echo \"error: build failed\"; sleep 0.2";
         let start = DaemonRequest::Start {
             task_key: "Attention".to_string(),
+            task_id: None,
             project_path: markdown_path.to_string_lossy().to_string(),
             shell: Some(vec![
                 "/bin/sh".to_string(),
