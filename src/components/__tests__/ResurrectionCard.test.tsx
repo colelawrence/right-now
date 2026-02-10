@@ -42,6 +42,9 @@ describe("ResurrectionCard", () => {
 
     // Attention preview should render
     expect(html).toContain("error: build failed");
+
+    // Copy brief button should be present
+    expect(html).toContain("Copy brief");
   });
 
   it("does not crash when optional fields are missing", () => {
@@ -59,6 +62,7 @@ describe("ResurrectionCard", () => {
 
     expect(html).toContain("No terminal");
     expect(html).toContain("No additional context captured");
+    expect(html).toContain("Copy brief");
   });
 
   it("renders note editor when onSaveNote is provided", () => {
@@ -78,5 +82,6 @@ describe("ResurrectionCard", () => {
 
     expect(html).toContain("Save note");
     expect(html).toContain("Write a note to future you");
+    expect(html).toContain("Copy brief");
   });
 });

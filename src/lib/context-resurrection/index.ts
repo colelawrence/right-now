@@ -5,5 +5,6 @@ export * from "./load";
 export * from "./tauri";
 export * from "./note";
 export * from "./forget";
+export * from "./agent-brief";
 export * from "./controller";
 export * from "./use-cr-controller";

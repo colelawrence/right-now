@@ -1,5 +1,6 @@
-import { IconClock, IconTerminal, IconX } from "@tabler/icons-react";
+import { IconClipboard, IconClock, IconTerminal, IconX } from "@tabler/icons-react";
 import { useEffect, useMemo, useState } from "react";
+import { formatAgentBrief } from "../lib/context-resurrection/agent-brief";
 import { selectCardData } from "../lib/context-resurrection/selectors";
 import type { ContextSnapshotV1 } from "../lib/context-resurrection/types";
 import { cn } from "./utils/cn";
@@ -43,10 +44,16 @@ export function ResurrectionCard({
   const [isSavingNote, setIsSavingNote] = useState(false);
   const [noteError, setNoteError] = useState<string | null>(null);
 
+  const [briefCopied, setBriefCopied] = useState(false);
+  const [briefCopyError, setBriefCopyError] = useState<string | null>(null);
+
   useEffect(() => {
     setDraftNote(snapshot.user_note ?? "");
     setIsSavingNote(false);
     setNoteError(null);
+
+    setBriefCopied(false);
+    setBriefCopyError(null);
   }, [snapshot.id, snapshot.user_note]);
 
   const handleSaveNote = async () => {
@@ -60,6 +67,20 @@ export function ResurrectionCard({
       setNoteError(error instanceof Error ? error.message : String(error));
     } finally {
       setIsSavingNote(false);
+    }
+  };
+
+  const handleCopyBrief = async () => {
+    setBriefCopyError(null);
+
+    const text = formatAgentBrief(snapshot);
+
+    try {
+      await navigator.clipboard.writeText(text);
+      setBriefCopied(true);
+      setTimeout(() => setBriefCopied(false), 2000);
+    } catch (error) {
+      setBriefCopyError(error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -185,8 +206,18 @@ export function ResurrectionCard({
           <div className="text-sm text-gray-600">No additional context captured for this snapshot.</div>
         )}
 
-        {onResume && (
-          <div className="mt-3 flex justify-end">
+        <div className="mt-3 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={handleCopyBrief}
+            className="px-3 py-1.5 border border-gray-300 text-gray-700 text-sm rounded hover:bg-gray-50 transition-colors flex items-center gap-1.5"
+            title="Copy an agent prompt (Pi / LLM)"
+          >
+            <IconClipboard size={16} />
+            {briefCopied ? "Copied!" : "Copy brief"}
+          </button>
+
+          {onResume && (
             <button
               type="button"
               onClick={onResume}
@@ -194,8 +225,10 @@ export function ResurrectionCard({
             >
               Resume work
             </button>
-          </div>
-        )}
+          )}
+        </div>
+
+        {briefCopyError && <div className="mt-1 text-xs text-red-600">{briefCopyError}</div>}
 
         {(onForgetTaskContext || onForgetProjectContext) && (
           <div className="mt-3 pt-3 border-t border-gray-200 flex items-center justify-between gap-3">
