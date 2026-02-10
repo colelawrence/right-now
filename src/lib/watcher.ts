@@ -64,7 +64,29 @@ export class FileWatcher {
         if (!isMeaningfulEvent(event.type)) return;
 
         // If we're watching the parent directory, filter to just this file.
-        const relevant = event.paths?.some((p) => basename(p) === targetBasename);
+        //
+        // On some platforms/editors, atomic saves (write temp + rename) can emit events
+        // that *don't* include the final destination path (TODO.md) in `event.paths`.
+        // We therefore treat a few additional cases as relevant:
+        // - missing/empty `paths` (some backends)
+        // - events reported for the watched directory itself
+        // - temp files that look like they belong to our target (e.g. .TODO.md.tmp.*)
+        const paths = event.paths ?? [];
+        const normalizedDir = normalizeEventPath(dir);
+        const relevant =
+          paths.length === 0 ||
+          paths.some((p) => {
+            const normalized = normalizeEventPath(p);
+            if (normalized === normalizedDir) return true;
+
+            const b = basename(normalized);
+            if (b === targetBasename) return true;
+
+            // Our own atomic writes use .<base>.tmp.*, and many editors use similar patterns.
+            if (b.startsWith(`.${targetBasename}.`)) return true;
+
+            return false;
+          });
         if (!relevant) return;
 
         void runCoalesced();
@@ -72,7 +94,8 @@ export class FileWatcher {
       {
         recursive: false,
         // Small debounce to avoid event storms from safe-save editors.
-        delayMs: 200,
+        // Slightly higher than 200ms to give atomic renames time to settle.
+        delayMs: 300,
       },
     );
   }

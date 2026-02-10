@@ -464,9 +464,16 @@ pomodoro_settings:
   }
 
   private async notifySubscribers(project: LoadedProjectState) {
-    // Notify subscribers in sequence to avoid race conditions
+    // Notify subscribers in sequence to avoid race conditions.
+    //
+    // IMPORTANT: Never let a single subscriber failure prevent the rest of the UI
+    // from updating (e.g. tray/title updates throwing would otherwise block React).
     for (const listener of Array.from(this.changeListeners)) {
-      await Promise.resolve(listener(project));
+      try {
+        await Promise.resolve(listener(project));
+      } catch (error) {
+        console.error("[ProjectManager] subscriber error:", error);
+      }
     }
   }
 
