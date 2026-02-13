@@ -1,0 +1,1147 @@
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TODO.md Lifecycle in Right Now — Explainer</title>
+    <meta
+      name="description"
+      content="A practical explainer of how Right Now listens to, writes, reorders, and reacts to TODO.md changes, including task completion and sound behavior."
+    />
+
+    <meta property="og:title" content="TODO.md Lifecycle in Right Now — Explainer" />
+    <meta
+      property="og:description"
+      content="Understand the full TODO.md lifecycle: watcher flow, UI writes, daemon badge writes, reorder behavior, task completion effects, and sound triggers."
+    />
+    <meta property="og:type" content="article" />
+    <meta property="og:locale" content="en_US" />
+
+    <script>
+      document.documentElement.classList.remove("no-js");
+      document.documentElement.classList.add("js");
+    </script>
+
+    <style>
+      :root {
+        --bg: #f8f8f6;
+        --fg: #161616;
+        --muted: #5a5a5a;
+        --rule: #262626;
+        --accent: #0b57d0;
+
+        --tint-1: #efefe8;
+        --tint-2: #f2f4f7;
+
+        --code-bg: #eceeea;
+        --code-fg: #101010;
+
+        --maxw: 960px;
+        --radius: 10px;
+
+        --s1: 0.25rem;
+        --s2: 0.5rem;
+        --s3: 0.75rem;
+        --s4: 1rem;
+        --s5: 1.5rem;
+        --s6: 2rem;
+      }
+
+      * { box-sizing: border-box; }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+        line-height: 1.5;
+      }
+
+      a { color: var(--accent); }
+      a:focus-visible,
+      button:focus-visible,
+      input:focus-visible,
+      select:focus-visible,
+      summary:focus-visible {
+        outline: 3px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      code,
+      pre,
+      kbd,
+      samp {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+
+      .page {
+        width: min(100%, var(--maxw));
+        margin: 0 auto;
+        padding: var(--s6) var(--s4) var(--s6);
+      }
+
+      header {
+        border-top: 6px solid var(--rule);
+        border-bottom: 6px solid var(--rule);
+        padding: var(--s5) 0;
+        margin-bottom: var(--s6);
+      }
+
+      h1 {
+        margin: 0 0 var(--s3);
+        font-size: clamp(1.6rem, 2.8vw, 2.3rem);
+        line-height: 1.2;
+      }
+
+      .premise {
+        margin: 0 0 var(--s4);
+        color: var(--muted);
+        max-width: 78ch;
+      }
+
+      .box {
+        border: 2px solid var(--rule);
+        border-radius: var(--radius);
+        padding: var(--s4);
+        background: var(--tint-1);
+      }
+
+      .toc {
+        margin: 0 0 var(--s6);
+        border-left: 5px solid var(--rule);
+        padding: var(--s4);
+        background: #fff;
+      }
+
+      .toc ul {
+        margin: 0;
+        padding-left: 1.2rem;
+      }
+
+      .toc li + li { margin-top: var(--s2); }
+
+      main {
+        counter-reset: sec;
+      }
+
+      section.main {
+        border-top: 4px solid var(--rule);
+        padding-top: var(--s5);
+        margin-top: var(--s6);
+      }
+
+      section.main h2 {
+        margin-top: 0;
+        font-size: clamp(1.25rem, 2.1vw, 1.6rem);
+      }
+
+      section.main h2::before {
+        counter-increment: sec;
+        content: counter(sec, decimal-leading-zero) ". ";
+        color: var(--accent);
+        font-weight: 800;
+      }
+
+      h3 {
+        margin-top: var(--s5);
+        margin-bottom: var(--s2);
+        font-size: 1.05rem;
+      }
+
+      p,
+      ul,
+      ol,
+      dl {
+        max-width: 78ch;
+      }
+
+      .callout {
+        border: 2px solid var(--rule);
+        background: var(--tint-2);
+        border-radius: var(--radius);
+        padding: var(--s4);
+      }
+
+      .scroll-x {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        margin: var(--s3) 0;
+      }
+
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        min-width: 700px;
+        background: #fff;
+      }
+
+      th,
+      td {
+        border: 1px solid #bfbfbf;
+        text-align: left;
+        vertical-align: top;
+        padding: var(--s2) var(--s3);
+      }
+
+      th {
+        background: #efefef;
+      }
+
+      pre {
+        margin: 0;
+      }
+
+      pre code {
+        display: block;
+        background: var(--code-bg);
+        color: var(--code-fg);
+        border: 1px solid #bdbdbd;
+        border-radius: 8px;
+        padding: var(--s3);
+        white-space: pre;
+      }
+
+      .diagram {
+        margin: var(--s4) 0;
+        border: 2px solid var(--rule);
+        border-radius: var(--radius);
+        padding: var(--s3);
+        background: #fff;
+      }
+
+      .diagram-ascii {
+        display: none;
+        margin: 0;
+        padding: var(--s3);
+        background: var(--code-bg);
+        border: 1px solid #bcbcbc;
+        border-radius: 8px;
+        overflow-x: auto;
+      }
+
+      .js .diagram-ascii {
+        display: block;
+      }
+
+      .diagram-live {
+        display: none;
+      }
+
+      .js .diagram.is-rendered .diagram-ascii {
+        display: none;
+      }
+
+      .js .diagram.is-rendered .diagram-live {
+        display: block;
+      }
+
+      figcaption {
+        margin-top: var(--s2);
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      .mini-check details {
+        border: 1px solid #bcbcbc;
+        border-radius: 8px;
+        background: #fff;
+        padding: var(--s2) var(--s3);
+      }
+
+      .mini-check details + details {
+        margin-top: var(--s2);
+      }
+
+      .interactive {
+        border: 2px solid var(--rule);
+        border-radius: var(--radius);
+        padding: var(--s4);
+        background: #fff;
+      }
+
+      .interactive-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: var(--s3);
+      }
+
+      .status {
+        margin-top: var(--s3);
+        border-left: 4px solid var(--accent);
+        padding-left: var(--s3);
+      }
+
+      .muted { color: var(--muted); }
+
+      .pill {
+        display: inline-block;
+        border: 1px solid #a7a7a7;
+        border-radius: 999px;
+        padding: 0.05rem 0.55rem;
+        font-size: 0.86rem;
+        background: #f4f4f4;
+      }
+
+      footer {
+        border-top: 4px solid var(--rule);
+        margin-top: var(--s6);
+        padding-top: var(--s5);
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          animation: none !important;
+          transition: none !important;
+          scroll-behavior: auto !important;
+        }
+      }
+
+      @media print {
+        :root {
+          --bg: #fff;
+          --fg: #000;
+          --muted: #222;
+          --rule: #000;
+          --accent: #000;
+        }
+
+        body { background: #fff; }
+
+        .page {
+          width: 100%;
+          max-width: none;
+          padding: 0;
+        }
+
+        .interactive button,
+        .interactive select,
+        .toc { break-inside: avoid; }
+
+        pre code,
+        .diagram-ascii {
+          background: #fff !important;
+          color: #000 !important;
+          border: 1px solid #000 !important;
+        }
+
+        a { color: #000; text-decoration: underline; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header>
+        <h1>TODO.md Lifecycle in Right Now</h1>
+        <p class="premise">
+          Right Now treats <code>TODO.md</code> as shared truth across UI, daemon, and external editors, so the hard part is
+          not parsing markdown—it is coordinating multiple writers without clobbering data.
+        </p>
+        <div class="box" aria-label="TLDR">
+          <strong>TL;DR</strong>
+          <ul>
+            <li>The UI watches the file’s parent directory and reloads on meaningful events, coalesced to avoid storms.</li>
+            <li>Every write path reads fresh content, applies a scoped mutation, then uses atomic rename writes.</li>
+            <li>Checking a task emits domain events (including <code>todo_complete</code> sound) and persists completion.</li>
+            <li>Session badges are daemon-owned and written independently as sessions move Running/Waiting/Stopped.</li>
+            <li>There are two sound channels: UI event-bus sounds and daemon terminal-attention sounds.</li>
+          </ul>
+        </div>
+      </header>
+
+      <nav class="toc" aria-labelledby="toc-title">
+        <h2 id="toc-title" style="margin-top: 0">Map of the page</h2>
+        <ul>
+          <li><a href="#sec-1">System shape: who owns what</a></li>
+          <li><a href="#sec-2">Listening: how TODO.md changes are detected</a></li>
+          <li><a href="#sec-3">Writing: how updates avoid clobbering</a></li>
+          <li><a href="#sec-4">Re-ordering: what is actually moved</a></li>
+          <li><a href="#sec-5">What happens when you check a task</a></li>
+          <li><a href="#sec-6">When sound plays (and why)</a></li>
+          <li><a href="#sec-7">When to use / when NOT to use each path</a></li>
+          <li><a href="#glossary">Glossary + further reading</a></li>
+        </ul>
+      </nav>
+
+      <main>
+        <section class="main" id="sec-1" aria-labelledby="h-sec-1">
+          <h2 id="h-sec-1">System shape: who owns what</h2>
+
+          <h3>Intuition</h3>
+          <p>
+            Think of <code>TODO.md</code> as a shared document with multiple editors working at once: the React UI edits task and
+            frontmatter state, the daemon edits session badges, and your external editor can edit anything at any time.
+          </p>
+
+          <h3>Definition / mental model</h3>
+          <ul>
+            <li><span class="pill">UI (TypeScript)</span> owns user-triggered edits and timer/frontmatter state.</li>
+            <li><span class="pill">Daemon (Rust)</span> owns session runtime and task badge updates.</li>
+            <li><span class="pill">Watcher</span> turns filesystem events into reloads for UI consistency.</li>
+            <li><span class="pill">Parser parity</span> TS and Rust mirror the same task/badge grammar.</li>
+          </ul>
+
+          <figure class="diagram" id="fig-ownership" data-kind="ownership">
+            <noscript>
+              <pre class="diagram-noscript">+------------------+      read/write       +------------------+
+| UI (project.ts)  |  -------------------> |    TODO.md       |
+| - completion     | <-------------------  | (single source)  |
+| - frontmatter    |       watcher         +------------------+
++------------------+                              ^
+                                                   | atomic badge updates
++-------------------------+                        |
+| Daemon (right-now-      | -----------------------+
+| daemon.rs)              |
+| - PTY sessions          |
+| - Running/Waiting badge |
++-------------------------+</pre>
+            </noscript>
+
+            <pre class="diagram-ascii" aria-label="Diagram (ASCII preview)">+------------------+      read/write       +------------------+
+| UI (project.ts)  |  -------------------> |    TODO.md       |
+| - completion     | <-------------------  | (single source)  |
+| - frontmatter    |       watcher         +------------------+
++------------------+                              ^
+                                                   | atomic badge updates
++-------------------------+                        |
+| Daemon (right-now-      | -----------------------+
+| daemon.rs)              |
+| - PTY sessions          |
+| - Running/Waiting badge |
++-------------------------+</pre>
+
+            <div class="diagram-live" aria-hidden="true" style="display: none"></div>
+            <figcaption>
+              Figure 1. Ownership boundaries around <code>TODO.md</code> in
+              <code>src/lib/project.ts</code> and <code>src-tauri/src/bin/right-now-daemon.rs</code>.
+            </figcaption>
+          </figure>
+
+          <h3>Example (concrete)</h3>
+          <div class="scroll-x">
+            <table>
+              <thead>
+                <tr>
+                  <th>Operation</th>
+                  <th>Primary writer</th>
+                  <th>How it persists</th>
+                  <th>Observed by UI</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Check/uncheck task</td>
+                  <td>UI <code>ProjectManager.updateProject()</code></td>
+                  <td>Fresh read → mutate draft → atomic rename write</td>
+                  <td>Immediate in-memory update + possible watcher no-op reload</td>
+                </tr>
+                <tr>
+                  <td>Session start/idle/stop badge</td>
+                  <td>Daemon <code>update_markdown_badge</code></td>
+                  <td>Fresh read → badge patch → atomic write</td>
+                  <td>Watcher reload of file change</td>
+                </tr>
+                <tr>
+                  <td>Manual external edit</td>
+                  <td>User/editor</td>
+                  <td>Editor save strategy (often temp+rename)</td>
+                  <td>Watcher catches directory-level events</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Common pitfalls / misconceptions</h3>
+          <ul>
+            <li>“UI is the only writer.” False: daemon also mutates task lines for session badges.</li>
+            <li>“Watching the file itself is enough.” Not robust with safe-save editors; directory watch is intentional.</li>
+            <li>“Badge writes can be last-write-wins safely.” Only because each writer re-reads fresh before writing.</li>
+          </ul>
+
+          <h3>Mini-check</h3>
+          <div class="mini-check">
+            <details>
+              <summary>Why watch the parent directory instead of just TODO.md?</summary>
+              <p>
+                Atomic save patterns often emit events on temp files or the directory; watching only the file can miss real
+                updates.
+              </p>
+            </details>
+            <details>
+              <summary>Which process owns Running/Waiting/Stopped task badges?</summary>
+              <p>The daemon process, not the React UI.</p>
+            </details>
+          </div>
+        </section>
+
+        <section class="main" id="sec-2" aria-labelledby="h-sec-2">
+          <h2 id="h-sec-2">Listening: how TODO.md changes are detected</h2>
+
+          <h3>Intuition</h3>
+          <p>
+            The file watcher is tuned for resilience, not elegance: it accepts some noisy events so that no meaningful save is
+            missed.
+          </p>
+
+          <h3>Definition / mental model</h3>
+          <ul>
+            <li><code>FileWatcher.watchProject()</code> watches <em>directory</em>, not file.</li>
+            <li>Filters to meaningful create/modify/remove classes.</li>
+            <li>Marks events as relevant if path is target file, directory itself, or matching temp pattern.</li>
+            <li>Uses coalescing (<code>inFlight</code>/<code>pending</code>) so multiple FS events become one reload loop.</li>
+          </ul>
+
+          <h3>Example (concrete)</h3>
+          <div class="scroll-x">
+            <pre><code>// src/lib/watcher.ts (conceptual)
+if (eventIsMeaningful &amp;&amp; eventLooksRelatedToTodoFile) {
+  runCoalescedReload();
+}
+
+// coalescing guarantees: if 8 events arrive while reload runs,
+// only one extra reload is queued.</code></pre>
+          </div>
+
+          <h3>Common pitfalls / misconceptions</h3>
+          <ul>
+            <li>“Every event triggers full parse immediately.” Not exactly; reloads are serialized and deduplicated.</li>
+            <li>“Parse failure means data loss.” No; parse failures are logged and last known-good state is retained.</li>
+            <li>“Watcher races with user actions are impossible.” Reduced, not impossible; op queue is mitigation.</li>
+          </ul>
+
+          <h3>Mini-check</h3>
+          <div class="mini-check">
+            <details>
+              <summary>What happens if the file is temporarily invalid YAML while editing?</summary>
+              <p>Reload parse can fail; UI keeps prior valid state and retries on later watcher events.</p>
+            </details>
+            <details>
+              <summary>How does event coalescing help?</summary>
+              <p>It prevents overlapping reloads and limits bursty event storms to a bounded number of reload passes.</p>
+            </details>
+          </div>
+        </section>
+
+        <section class="main" id="sec-3" aria-labelledby="h-sec-3">
+          <h2 id="h-sec-3">Writing: how updates avoid clobbering</h2>
+
+          <h3>Intuition</h3>
+          <p>
+            The main anti-clobber rule is simple: never write from stale text. Always read what is currently on disk first.
+          </p>
+
+          <h3>Definition / mental model</h3>
+          <ol>
+            <li>Read fresh file content.</li>
+            <li>Parse into structured draft.</li>
+            <li>Apply small targeted mutation.</li>
+            <li>Re-stringify markdown/frontmatter preserving known structure.</li>
+            <li>Write via temp file + rename (atomic replace).</li>
+          </ol>
+          <p>
+            Both UI and daemon follow this pattern (UI: <code>project.ts</code>, daemon: <code>update_markdown_badge()</code> +
+            <code>atomic_write()</code>).
+          </p>
+
+          <h3>Example (concrete)</h3>
+          <div class="scroll-x">
+            <pre><code>// UI path (simplified)
+fresh = readTextFile(TODO.md)
+draft = ProjectStateEditor.parse(fresh)
+mutate(draft)
+next = ProjectStateEditor.update(fresh, draft)
+writeTempThenRename(next)
+
+// Daemon path (simplified)
+fresh = read_to_string(TODO.md)
+next = update_task_session_in_content(fresh, task_key, badge)
+atomic_write(TODO.md, next)</code></pre>
+          </div>
+
+          <h3>Common pitfalls / misconceptions</h3>
+          <ul>
+            <li>“Atomic rename alone solves races.” It prevents torn writes, not stale-base overwrite bugs.</li>
+            <li>“Daemon can safely patch from cached parse.” It intentionally re-reads file right before patching.</li>
+            <li>“Task name is always enough keying.” Task IDs exist to make matching stable across reorders/duplicates.</li>
+          </ul>
+
+          <h3>Mini-check</h3>
+          <div class="mini-check">
+            <details>
+              <summary>Why do both UI and daemon re-read right before writing?</summary>
+              <p>To reduce lost updates when another actor edited the file moments before.</p>
+            </details>
+            <details>
+              <summary>What does atomic rename actually guarantee?</summary>
+              <p>Readers see either old file or new file, not a partially written intermediate file.</p>
+            </details>
+          </div>
+        </section>
+
+        <section class="main" id="sec-4" aria-labelledby="h-sec-4">
+          <h2 id="h-sec-4">Re-ordering: what is actually moved</h2>
+
+          <h3>Intuition</h3>
+          <p>
+            Reordering in this UI is currently section-level, not arbitrary task drag/drop. You move a heading and all blocks
+            under it.
+          </p>
+
+          <h3>Definition / mental model</h3>
+          <ul>
+            <li>UI buttons in <code>TaskList</code> call <code>onMoveHeadingSection(index, direction)</code>.</li>
+            <li><code>ProjectStateEditor.moveHeadingSection()</code> computes heading boundaries and swaps slices.</li>
+            <li>Invalid moves (first up, last down, non-heading index) return <code>null</code> (no write).</li>
+          </ul>
+
+          <h3>Example (concrete)</h3>
+          <div class="scroll-x">
+            <table>
+              <thead>
+                <tr>
+                  <th>Input</th>
+                  <th>Move</th>
+                  <th>Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>## A ... ## B ... ## C ...</code></td>
+                  <td>Move B up</td>
+                  <td><code>## B ... ## A ... ## C ...</code></td>
+                </tr>
+                <tr>
+                  <td><code>## A ... ## B ... ## C ...</code></td>
+                  <td>Move B down</td>
+                  <td><code>## A ... ## C ... ## B ...</code></td>
+                </tr>
+                <tr>
+                  <td>First heading</td>
+                  <td>Move up</td>
+                  <td>No-op (returns null)</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Common pitfalls / misconceptions</h3>
+          <ul>
+            <li>“Task reorder exists today.” In this path, no; only heading sections are reordered.</li>
+            <li>“Only tasks move.” Unrecognized markdown blocks inside section move with the section slice.</li>
+            <li>“Reorder mutates in-memory only.” It persists to file atomically like other writes.</li>
+          </ul>
+
+          <h3>Mini-check</h3>
+          <div class="mini-check">
+            <details>
+              <summary>What index does moveHeadingSection expect?</summary>
+              <p>The block index of a heading inside the parsed markdown array, not a visual row number.</p>
+            </details>
+            <details>
+              <summary>Why include non-task blocks in section swap?</summary>
+              <p>To preserve markdown structure and avoid orphaning notes between headings.</p>
+            </details>
+          </div>
+        </section>
+
+        <section class="main" id="sec-5" aria-labelledby="h-sec-5">
+          <h2 id="h-sec-5">What happens when you check a task</h2>
+
+          <h3>Intuition</h3>
+          <p>Checkbox click is both a persistence operation and an event emission point for UX side effects (sound, telemetry-like history).</p>
+
+          <h3>Definition / mental model</h3>
+          <ol>
+            <li>UI click calls <code>onCompleteTask(taskIndex, task)</code>.</li>
+            <li><code>toggleTaskComplete()</code> mutates draft via stable reference (index first, taskId fallback).</li>
+            <li>If state became complete: emit <code>task_completed</code> + <code>sound(todo_complete)</code>.</li>
+            <li>Persist updated content through <code>ProjectManager.updateProject()</code> atomic write path.</li>
+          </ol>
+
+          <figure class="diagram" id="fig-check" data-kind="check-flow">
+            <noscript>
+              <pre class="diagram-noscript">[UI checkbox click]
+      |
+      v
+toggleTaskComplete(draft)
+      |
+      +--> becameComplete? --yes--> emit task_completed + sound(todo_complete)
+      |
+      v
+ProjectStateEditor.update(...)
+      |
+      v
+atomic write TODO.md
+      |
+      v
+watcher may reload (or no-op if already in sync)</pre>
+            </noscript>
+
+            <pre class="diagram-ascii" aria-label="Diagram (ASCII preview)">[UI checkbox click]
+      |
+      v
+toggleTaskComplete(draft)
+      |
+      +--> becameComplete? --yes--> emit task_completed + sound(todo_complete)
+      |
+      v
+ProjectStateEditor.update(...)
+      |
+      v
+atomic write TODO.md
+      |
+      v
+watcher may reload (or no-op if already in sync)</pre>
+
+            <div class="diagram-live" aria-hidden="true" style="display: none"></div>
+            <figcaption>
+              Figure 2. Task completion path from UI interaction to persisted markdown and emitted sound event.
+            </figcaption>
+          </figure>
+
+          <h3>Example (concrete)</h3>
+          <div class="interactive" id="lifecycle-sim" aria-labelledby="sim-title">
+            <h3 id="sim-title" style="margin-top: 0">Interactive: lifecycle event simulator</h3>
+            <p class="muted">Choose an action to see which subsystem writes, what watcher does, and whether sound is expected.</p>
+
+            <div class="interactive-grid">
+              <label>
+                Action
+                <select id="sim-action" name="sim-action">
+                  <option value="check">Check task in UI</option>
+                  <option value="uncheck">Uncheck task in UI</option>
+                  <option value="start">Start session</option>
+                  <option value="stop">Stop session</option>
+                  <option value="reorder">Move heading section</option>
+                  <option value="external">Save file in external editor</option>
+                </select>
+              </label>
+
+              <label>
+                <input type="checkbox" id="sim-sound-enabled" checked />
+                Sound manager available
+              </label>
+            </div>
+
+            <div class="status" id="sim-output" role="status" aria-live="polite">
+              Select an action to inspect its lifecycle.
+            </div>
+
+            <noscript>
+              <p class="muted">JavaScript is off. Quick static mapping:</p>
+              <ul>
+                <li>Check task: UI writes file, emits <code>todo_complete</code> sound event.</li>
+                <li>Start/Stop session: daemon writes badge, watcher reloads UI.</li>
+                <li>External save: watcher reloads; no built-in sound by default.</li>
+              </ul>
+            </noscript>
+          </div>
+
+          <h3>Common pitfalls / misconceptions</h3>
+          <ul>
+            <li>“Checking complete auto-stops daemon session.” Not inherently; session control is separate.</li>
+            <li>“Task lookup by name is always safe.” Duplicate names are handled via index + taskId fallback.</li>
+            <li>“Watcher is always required after check.” UI updates in-memory immediately, watcher may become no-op.</li>
+          </ul>
+
+          <h3>Mini-check</h3>
+          <div class="mini-check">
+            <details>
+              <summary>Which event directly causes the TODO complete sound?</summary>
+              <p>A <code>sound</code> event emitted by <code>computeTaskCompletedEvents()</code> with name <code>todo_complete</code>.</p>
+            </details>
+            <details>
+              <summary>How does task toggling stay stable when list changes?</summary>
+              <p>It first verifies by markdown index, then falls back to stable taskId matching.</p>
+            </details>
+          </div>
+        </section>
+
+        <section class="main" id="sec-6" aria-labelledby="h-sec-6">
+          <h2 id="h-sec-6">When sound plays (and why)</h2>
+
+          <h3>Intuition</h3>
+          <p>There are two independent sound pipelines: one in-app for state/task events and one in daemon notifications for terminal attention.</p>
+
+          <h3>Definition / mental model</h3>
+          <ul>
+            <li>
+              <strong>UI sound pipeline</strong>: EventBus emits <code>sound</code> events → <code>SoundPlayer</code> subscriber →
+              <code>ISoundManager.playSound()</code> → Tauri <code>play_sound</code> command.
+            </li>
+            <li>
+              <strong>Daemon attention pipeline</strong>: PTY output pattern match → notification debouncer → terminal escapes +
+              system sound (<code>afplay</code>/<code>paplay</code>).</li>
+          </ul>
+
+          <h3>Example (concrete)</h3>
+          <div class="scroll-x">
+            <table>
+              <thead>
+                <tr>
+                  <th>Trigger</th>
+                  <th>Emitter</th>
+                  <th>Sound name / type</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Task checked complete</td>
+                  <td>UI timer-logic</td>
+                  <td><code>todo_complete</code></td>
+                  <td>Runs through EventBus + SoundPlayer</td>
+                </tr>
+                <tr>
+                  <td>Planning → Working</td>
+                  <td>UI state-change logic</td>
+                  <td><code>session_start</code></td>
+                  <td>Transition sound</td>
+                </tr>
+                <tr>
+                  <td>Timer warning threshold</td>
+                  <td>UI timer logic</td>
+                  <td><code>break_approaching</code> / <code>break_end_approaching</code></td>
+                  <td>Has warning dedup window</td>
+                </tr>
+                <tr>
+                  <td>PTY attention pattern</td>
+                  <td>Daemon notify path</td>
+                  <td>System notification sound</td>
+                  <td>Debounced per session (5s)</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Common pitfalls / misconceptions</h3>
+          <ul>
+            <li>“All sounds come from one subsystem.” No—UI event sounds and daemon attention sounds are separate.</li>
+            <li>“UI sound event always means audible playback.” Audio device/sound pack availability can no-op playback.</li>
+            <li>“Attention sounds are task completion sounds.” They are terminal output pattern alerts, not checkbox events.</li>
+          </ul>
+
+          <h3>Mini-check</h3>
+          <div class="mini-check">
+            <details>
+              <summary>Where is notification debouncing for attention events handled?</summary>
+              <p>In daemon-side <code>NotificationDebouncer</code> (<code>src-tauri/src/session/notify.rs</code>).</p>
+            </details>
+            <details>
+              <summary>Can TODO complete sound happen with daemon off?</summary>
+              <p>Yes. That sound is UI-side EventBus behavior, independent of daemon session runtime.</p>
+            </details>
+          </div>
+        </section>
+
+        <section class="main" id="sec-7" aria-labelledby="h-sec-7">
+          <h2 id="h-sec-7">When to use / when NOT to use each path</h2>
+
+          <h3>Intuition</h3>
+          <p>Pick a mutation path based on ownership: task/frontmatter edits through UI paths; session badge semantics through daemon paths.</p>
+
+          <h3>Definition / mental model</h3>
+          <p>
+            <strong>When to use:</strong> UI APIs for task completion, active task, timer state; daemon APIs for PTY session lifecycle and
+            badge transitions.
+          </p>
+          <p>
+            <strong>When NOT to use:</strong> do not manually script badge strings in UI as source of truth for runtime status, and do not
+            bypass fresh-read/atomic-write patterns.
+          </p>
+
+          <h3>Example (concrete)</h3>
+          <div class="callout">
+            <ul>
+              <li>Use <code>projectManager.updateProject()</code> for toggling completion or frontmatter fields.</li>
+              <li>Use <code>session_start/session_stop</code> for session badges and PTY-driven states.</li>
+              <li>Avoid direct blind overwrite of full file text from stale in-memory snapshots.</li>
+            </ul>
+          </div>
+
+          <h3>Common pitfalls / misconceptions</h3>
+          <ul>
+            <li>Writing convenience scripts that bypass parser parity can corrupt task-id/badge ordering.</li>
+            <li>Assuming external edits are rare leads to stale-base writes and dropped user changes.</li>
+            <li>Treating watcher as synchronization lock: it is eventual consistency, not transaction isolation.</li>
+          </ul>
+
+          <h3>Mini-check</h3>
+          <div class="mini-check">
+            <details>
+              <summary>Which side should set <code>[Running](todos://session/N)</code>?</summary>
+              <p>The daemon, as part of session state transitions.</p>
+            </details>
+            <details>
+              <summary>If you need to mark a task complete from UI, what path should you call?</summary>
+              <p><code>ProjectManager.updateProject()</code> with <code>toggleTaskComplete()</code>-style stable task references.</p>
+            </details>
+          </div>
+        </section>
+      </main>
+
+      <footer id="glossary">
+        <h2 style="margin-top: 0">Glossary</h2>
+        <dl>
+          <dt><strong>Atomic write</strong></dt>
+          <dd>Write to temp file and rename over target so readers never see partial content.</dd>
+
+          <dt><strong>Session badge</strong></dt>
+          <dd>A task suffix like <code>[Running](todos://session/42)</code> indicating daemon session state.</dd>
+
+          <dt><strong>Task ID token</strong></dt>
+          <dd>Stable identifier in task text, e.g. <code>[abc.some-task]</code>, used for robust matching.</dd>
+
+          <dt><strong>Coalesced reload</strong></dt>
+          <dd>Watcher strategy that merges bursts of filesystem events into bounded reload passes.</dd>
+
+          <dt><strong>Attention event</strong></dt>
+          <dd>Daemon-detected PTY output pattern that triggers terminal notification and optional system sound.</dd>
+        </dl>
+
+        <h2>Further reading</h2>
+        <ul>
+          <li><code>src/lib/project.ts</code> — core read/write queue and file lifecycle</li>
+          <li><code>src/lib/watcher.ts</code> — directory watch + event relevance/coalescing</li>
+          <li><code>src/lib/ProjectStateEditor.ts</code> — parse/update/reorder logic</li>
+          <li><code>src/lib/task-actions.ts</code> — stable task completion toggling</li>
+          <li><code>src/lib/timer-logic.ts</code>, <code>src/lib/sound-player.ts</code>, <code>src/lib/sounds.ts</code></li>
+          <li><code>src-tauri/src/bin/right-now-daemon.rs</code> — session and badge updates</li>
+          <li><code>src-tauri/src/session/markdown.rs</code>, <code>notify.rs</code>, <code>attention.rs</code></li>
+        </ul>
+      </footer>
+    </div>
+
+    <script defer>
+      (() => {
+        const NS = {
+          svg(nsTag) {
+            return document.createElementNS("http://www.w3.org/2000/svg", nsTag);
+          },
+
+          makeText(x, y, text, cls = "") {
+            const t = NS.svg("text");
+            t.setAttribute("x", String(x));
+            t.setAttribute("y", String(y));
+            if (cls) t.setAttribute("class", cls);
+            t.textContent = text;
+            return t;
+          },
+
+          baseSvg(width, height, titleText, descText) {
+            const svg = NS.svg("svg");
+            svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+            svg.setAttribute("width", "100%");
+            svg.setAttribute("height", "auto");
+            svg.setAttribute("role", "img");
+
+            const title = NS.svg("title");
+            title.textContent = titleText;
+            const desc = NS.svg("desc");
+            desc.textContent = descText;
+            svg.append(title, desc);
+
+            const defs = NS.svg("defs");
+            const marker = NS.svg("marker");
+            marker.setAttribute("id", "arrow");
+            marker.setAttribute("viewBox", "0 0 10 10");
+            marker.setAttribute("refX", "9");
+            marker.setAttribute("refY", "5");
+            marker.setAttribute("markerWidth", "6");
+            marker.setAttribute("markerHeight", "6");
+            marker.setAttribute("orient", "auto-start-reverse");
+            const path = NS.svg("path");
+            path.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
+            path.setAttribute("fill", "#222");
+            marker.appendChild(path);
+            defs.appendChild(marker);
+            svg.appendChild(defs);
+
+            return svg;
+          },
+
+          box(svg, x, y, w, h, label, sublabel = "") {
+            const r = NS.svg("rect");
+            r.setAttribute("x", String(x));
+            r.setAttribute("y", String(y));
+            r.setAttribute("width", String(w));
+            r.setAttribute("height", String(h));
+            r.setAttribute("rx", "8");
+            r.setAttribute("ry", "8");
+            r.setAttribute("fill", "#f6f6f6");
+            r.setAttribute("stroke", "#222");
+            r.setAttribute("stroke-width", "1.5");
+            svg.appendChild(r);
+
+            const t1 = NS.makeText(x + 12, y + 22, label);
+            t1.setAttribute("style", "font: 600 13px system-ui, sans-serif; fill: #111;");
+            svg.appendChild(t1);
+
+            if (sublabel) {
+              const t2 = NS.makeText(x + 12, y + 42, sublabel, "mono");
+              t2.setAttribute("style", "font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #333;");
+              svg.appendChild(t2);
+            }
+          },
+
+          arrow(svg, x1, y1, x2, y2, label = "") {
+            const line = NS.svg("line");
+            line.setAttribute("x1", String(x1));
+            line.setAttribute("y1", String(y1));
+            line.setAttribute("x2", String(x2));
+            line.setAttribute("y2", String(y2));
+            line.setAttribute("stroke", "#222");
+            line.setAttribute("stroke-width", "1.5");
+            line.setAttribute("marker-end", "url(#arrow)");
+            svg.appendChild(line);
+
+            if (label) {
+              const tx = (x1 + x2) / 2;
+              const ty = (y1 + y2) / 2 - 6;
+              const t = NS.makeText(tx, ty, label);
+              t.setAttribute("text-anchor", "middle");
+              t.setAttribute("style", "font: 12px system-ui, sans-serif; fill: #222;");
+              svg.appendChild(t);
+            }
+          },
+
+          renderOwnershipFigure(figure) {
+            const live = figure.querySelector(".diagram-live");
+            if (!live) return;
+
+            const svg = NS.baseSvg(
+              860,
+              310,
+              "Ownership and data flow diagram",
+              "UI and daemon both write TODO.md while watcher reloads updates into UI."
+            );
+
+            NS.box(svg, 30, 40, 220, 84, "UI", "project.ts");
+            NS.box(svg, 320, 110, 220, 84, "TODO.md", "single source");
+            NS.box(svg, 610, 40, 220, 84, "Daemon", "right-now-daemon.rs");
+
+            NS.arrow(svg, 250, 84, 320, 140, "write/read");
+            NS.arrow(svg, 540, 140, 610, 84, "badge writes");
+            NS.arrow(svg, 430, 194, 140, 194, "watcher reload");
+
+            live.appendChild(svg);
+          },
+
+          renderCheckFlowFigure(figure) {
+            const live = figure.querySelector(".diagram-live");
+            if (!live) return;
+
+            const svg = NS.baseSvg(
+              860,
+              360,
+              "Task check flow diagram",
+              "Checkbox click mutates draft, emits events if complete, then writes atomically and may trigger watcher reload."
+            );
+
+            NS.box(svg, 50, 30, 240, 68, "Checkbox click", "TaskRow -> App");
+            NS.box(svg, 50, 126, 240, 68, "toggleTaskComplete", "index + taskId fallback");
+            NS.box(svg, 330, 126, 240, 68, "Emit events", "task_completed + sound");
+            NS.box(svg, 50, 226, 240, 68, "Persist update", "atomic write");
+            NS.box(svg, 330, 226, 240, 68, "Watcher reaction", "reload or no-op");
+
+            NS.arrow(svg, 170, 98, 170, 126, "");
+            NS.arrow(svg, 290, 160, 330, 160, "becameComplete");
+            NS.arrow(svg, 170, 194, 170, 226, "");
+            NS.arrow(svg, 290, 260, 330, 260, "fs event");
+
+            live.appendChild(svg);
+          },
+
+          renderDiagrams() {
+            const figures = document.querySelectorAll("figure.diagram[data-kind]");
+            figures.forEach((fig) => {
+              try {
+                const kind = fig.getAttribute("data-kind");
+                if (kind === "ownership") NS.renderOwnershipFigure(fig);
+                if (kind === "check-flow") NS.renderCheckFlowFigure(fig);
+                fig.classList.add("is-rendered");
+              } catch (err) {
+                console.error("Diagram render failed", err);
+              }
+            });
+          },
+
+          describeAction(action, soundEnabled) {
+            const map = {
+              check: {
+                writer: "UI",
+                watcher: "May no-op reload if in-memory already matches",
+                sound: soundEnabled ? "todo_complete" : "Event emitted but playback unavailable",
+              },
+              uncheck: {
+                writer: "UI",
+                watcher: "May no-op reload",
+                sound: "No completion sound",
+              },
+              start: {
+                writer: "Daemon",
+                watcher: "Reload after badge becomes Running",
+                sound: "No automatic UI completion sound",
+              },
+              stop: {
+                writer: "Daemon",
+                watcher: "Reload after badge becomes Stopped",
+                sound: "No automatic UI completion sound",
+              },
+              reorder: {
+                writer: "UI",
+                watcher: "Usually no-op after local update, but still observable",
+                sound: "No dedicated reorder sound",
+              },
+              external: {
+                writer: "External editor",
+                watcher: "Reload expected from directory events",
+                sound: "No built-in sound by default",
+              },
+            };
+            return map[action] || map.external;
+          },
+
+          initSim() {
+            const root = document.getElementById("lifecycle-sim");
+            const actionEl = document.getElementById("sim-action");
+            const soundEl = document.getElementById("sim-sound-enabled");
+            const out = document.getElementById("sim-output");
+            if (!root || !actionEl || !soundEl || !out) return;
+
+            const render = () => {
+              const action = actionEl.value;
+              const soundEnabled = Boolean(soundEl.checked);
+              const d = NS.describeAction(action, soundEnabled);
+              out.innerHTML = `
+                <strong>Writer:</strong> ${d.writer}<br/>
+                <strong>Watcher:</strong> ${d.watcher}<br/>
+                <strong>Sound path:</strong> ${d.sound}
+              `;
+            };
+
+            actionEl.addEventListener("change", render);
+            soundEl.addEventListener("change", render);
+            render();
+          },
+
+          selfTest() {
+            console.assert(document.querySelector("header h1"), "Missing page title");
+            console.assert(document.querySelectorAll("section.main").length >= 7, "Expected 7+ main sections");
+            console.assert(document.querySelectorAll("figure.diagram").length >= 2, "Expected at least 2 diagrams");
+            console.assert(document.getElementById("lifecycle-sim"), "Missing interactive simulator");
+          },
+
+          init() {
+            NS.renderDiagrams();
+            NS.initSim();
+            NS.selfTest();
+          },
+        };
+
+        NS.init();
+      })();
+    </script>
+  </body>
+</html>
